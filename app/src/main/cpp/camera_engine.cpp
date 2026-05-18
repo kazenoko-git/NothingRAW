@@ -1,5 +1,6 @@
 #include "camera_engine.h"
 #include <android/log.h>
+#include <algorithm>
 
 #define TAG "NothingRAW_CameraEngine"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -93,6 +94,19 @@ void CameraEngine::RunCommandLoop() {
                     if (entry.count == 4) {
                         activeArray_ = {entry.data.i32[0], entry.data.i32[1], entry.data.i32[2], entry.data.i32[3]};
                     }
+
+                    // Log optimal resolution
+                    ACameraMetadata_getConstEntry(chars, ACAMERA_SCALER_AVAILABLE_STREAM_CONFIGURATIONS, &entry);
+                    for (uint32_t i = 0; i < entry.count; i += 4) {
+                        int32_t format = entry.data.i32[i];
+                        int32_t w = entry.data.i32[i+1];
+                        int32_t h = entry.data.i32[i+2];
+                        int32_t input = entry.data.i32[i+3];
+                        if (format == 0x22 && !input) { // 0x22 = PRIVATE/YUV
+                            LOGI("Thread: Supported Size: %dx%d", w, h);
+                        }
+                    }
+
                     ACameraMetadata_free(chars);
                 }
 
@@ -131,6 +145,7 @@ void CameraEngine::RunCommandLoop() {
 void CameraEngine::CloseCamera_Internal() {
     StopPreview_Internal();
     if (cameraDevice_) {
+        LOGI("Internal: Closing Camera Device");
         ACameraDevice_close(cameraDevice_);
         cameraDevice_ = nullptr;
     }
@@ -150,20 +165,42 @@ void CameraEngine::StartPreview_Internal() {
     ACameraDevice_createCaptureRequest(cameraDevice_, TEMPLATE_PREVIEW, &previewRequest_);
     ACaptureRequest_addTarget(previewRequest_, textureTarget_);
 
-    // FORCED UNLOCKS
+    // --- BYPASS ISP OVER-PROCESSING ---
+
+    // 1. Force 60 FPS
     int32_t fpsRange[2] = {60, 60};
     ACaptureRequest_setEntry_i32(previewRequest_, ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 2, fpsRange);
 
+    // 2. Set Zoom (0.6x for wide)
     float zoom = zoomRatio_;
     ACaptureRequest_setEntry_float(previewRequest_, ACAMERA_CONTROL_ZOOM_RATIO, 1, &zoom);
 
-    uint8_t oisMode = ACAMERA_LENS_OPTICAL_STABILIZATION_MODE_ON;
+    // 3. DISABLE ALL STABILIZATION (This kills the crop!)
+    uint8_t oisMode = ACAMERA_LENS_OPTICAL_STABILIZATION_MODE_OFF;
     ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_LENS_OPTICAL_STABILIZATION_MODE, 1, &oisMode);
 
+    uint8_t eisMode = ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE_OFF;
+    ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE, 1, &eisMode);
+
+    // 4. DISABLE NOISE REDUCTION (Kills the "grainy" mush, gives raw sensor look)
     uint8_t noiseMode = ACAMERA_NOISE_REDUCTION_MODE_OFF;
     ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_NOISE_REDUCTION_MODE, 1, &noiseMode);
 
+    // 5. DISABLE EDGE ENHANCEMENT
+    uint8_t edgeMode = ACAMERA_EDGE_MODE_OFF;
+    ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_EDGE_MODE, 1, &edgeMode);
+
+    // 6. DISABLE ABERRATION CORRECTION
+    uint8_t colorMode = ACAMERA_COLOR_CORRECTION_ABERRATION_MODE_OFF;
+    ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_COLOR_CORRECTION_ABERRATION_MODE, 1, &colorMode);
+
+    // 7. ENSURE FULL CROP REGION
+    if (!activeArray_.empty()) {
+        ACaptureRequest_setEntry_i32(previewRequest_, ACAMERA_SCALER_CROP_REGION, 4, activeArray_.data());
+    }
+
     ACameraCaptureSession_setRepeatingRequest(captureSession_, nullptr, 1, &previewRequest_, nullptr);
+    LOGI("Internal: Preview started with RAW configuration (OIS/EIS/NR OFF)");
 }
 
 void CameraEngine::StopPreview_Internal() {
@@ -190,7 +227,7 @@ void CameraEngine::StopPreview_Internal() {
     }
 }
 
-// Callbacks (Simplified for brevity)
+// Callbacks (Simplified)
 void CameraEngine::OnDeviceDisconnected(void* context, ACameraDevice* device) {}
 void CameraEngine::OnDeviceError(void* context, ACameraDevice* device, int error) {}
 void CameraEngine::OnSessionActive(void* context, ACameraCaptureSession* session) {}
