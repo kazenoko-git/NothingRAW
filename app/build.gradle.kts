@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.kazenoko.nothingraw"
+    namespace = "org.codeaurora.snapcam"
     compileSdk = 36
 
     defaultConfig {
