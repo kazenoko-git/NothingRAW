@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.util.Log
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -91,8 +92,13 @@ class MainActivity : ComponentActivity() {
                         color = Color.White
                     )
                     CameraSelector(nativeCameras) { id ->
-                        activeCameraId = id.split("|")[0].trim()
-                        openCamera(activeCameraId!!)
+                        val newId = id.split("|")[0].trim()
+                        if (newId != activeCameraId) {
+                            Log.i("MainActivity", "UI: Switching to camera $newId")
+                            activeCameraId = newId
+                            // The actual open happens in the worker thread via JNI
+                            openCamera(newId)
+                        }
                     }
                 }
                 
@@ -142,14 +148,21 @@ class MainActivity : ComponentActivity() {
                 SurfaceView(context).apply {
                     holder.addCallback(object : SurfaceHolder.Callback {
                         override fun surfaceCreated(holder: SurfaceHolder) {
+                            Log.i("MainActivity", "UI: Surface Created, starting preview")
                             startPreview(holder.surface)
                         }
                         override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
-                        override fun surfaceDestroyed(holder: SurfaceHolder) {}
+                        override fun surfaceDestroyed(holder: SurfaceHolder) {
+                            Log.i("MainActivity", "UI: Surface Destroyed")
+                        }
                     })
                 }
             },
-            update = { /* Re-start preview if camera ID changes */ }
+            update = { view ->
+                // This triggers when activeCameraId changes
+                // If the surface already exists, we might need to re-start preview
+                // but the openCamera call in the selector already triggers a Close/Open sequence in C++.
+            }
         )
     }
 

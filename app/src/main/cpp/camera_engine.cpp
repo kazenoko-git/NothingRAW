@@ -8,6 +8,7 @@
 namespace nothingraw {
 
 CameraEngine::CameraEngine(ACameraManager* manager) : cameraManager_(manager) {
+    LOGI("Engine: Initializing");
     deviceCallbacks_.context = this;
     deviceCallbacks_.onDisconnected = OnDeviceDisconnected;
     deviceCallbacks_.onError = OnDeviceError;
@@ -21,6 +22,7 @@ CameraEngine::CameraEngine(ACameraManager* manager) : cameraManager_(manager) {
 }
 
 CameraEngine::~CameraEngine() {
+    LOGI("Engine: Destroying");
     {
         std::lock_guard<std::mutex> lock(queueMutex_);
         isRunning_ = false;
@@ -33,30 +35,35 @@ CameraEngine::~CameraEngine() {
 }
 
 void CameraEngine::OpenCamera(const std::string& id) {
+    LOGI("JNI: Queueing OpenCamera %s", id.c_str());
     std::lock_guard<std::mutex> lock(queueMutex_);
     commandQueue_.push({CommandType::OPEN, id, nullptr});
     queueCondition_.notify_one();
 }
 
 void CameraEngine::CloseCamera() {
+    LOGI("JNI: Queueing CloseCamera");
     std::lock_guard<std::mutex> lock(queueMutex_);
     commandQueue_.push({CommandType::CLOSE, "", nullptr});
     queueCondition_.notify_one();
 }
 
 void CameraEngine::StartPreview(ANativeWindow* window) {
+    LOGI("JNI: Queueing StartPreview");
     std::lock_guard<std::mutex> lock(queueMutex_);
     commandQueue_.push({CommandType::START_PREVIEW, "", window});
     queueCondition_.notify_one();
 }
 
 void CameraEngine::StopPreview() {
+    LOGI("JNI: Queueing StopPreview");
     std::lock_guard<std::mutex> lock(queueMutex_);
     commandQueue_.push({CommandType::STOP_PREVIEW, "", nullptr});
     queueCondition_.notify_one();
 }
 
 void CameraEngine::RunCommandLoop() {
+    LOGI("Thread: Worker started");
     while (isRunning_) {
         Command cmd;
         {
@@ -68,16 +75,18 @@ void CameraEngine::RunCommandLoop() {
 
         switch (cmd.type) {
             case CommandType::OPEN:
-                LOGI("Thread: Opening Camera ID: %s", cmd.cameraId.c_str());
+                LOGI("Thread: Executing OPEN %s", cmd.cameraId.c_str());
                 CloseCamera_Internal();
                 ACameraManager_openCamera(cameraManager_, cmd.cameraId.c_str(), &deviceCallbacks_, &cameraDevice_);
+                LOGI("Thread: OPEN call finished");
                 break;
             case CommandType::CLOSE:
-                LOGI("Thread: Closing Camera");
+                LOGI("Thread: Executing CLOSE");
                 CloseCamera_Internal();
+                LOGI("Thread: CLOSE finished");
                 break;
             case CommandType::START_PREVIEW:
-                LOGI("Thread: Starting Preview");
+                LOGI("Thread: Executing START_PREVIEW");
                 if (cameraDevice_ && cmd.window) {
                     window_ = cmd.window;
                     StopPreview_Internal();
@@ -85,7 +94,10 @@ void CameraEngine::RunCommandLoop() {
                     ACameraOutputTarget_create(window_, &textureTarget_);
                     ACaptureSessionOutput_create(window_, &textureOutput_);
                     ACaptureSessionOutputContainer_add(outputs_, textureOutput_);
+
+                    LOGI("Thread: Creating Session");
                     ACameraDevice_createCaptureSession(cameraDevice_, outputs_, &sessionCallbacks_, &captureSession_);
+
                     ACameraDevice_createCaptureRequest(cameraDevice_, TEMPLATE_PREVIEW, &previewRequest_);
                     ACaptureRequest_addTarget(previewRequest_, textureTarget_);
 
@@ -96,15 +108,20 @@ void CameraEngine::RunCommandLoop() {
                     uint8_t eisMode = ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE_ON;
                     ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE, 1, &eisMode);
 
+                    LOGI("Thread: Setting Repeating Request");
                     ACameraCaptureSession_setRepeatingRequest(captureSession_, nullptr, 1, &previewRequest_, nullptr);
+                } else {
+                    LOGE("Thread: Cannot start preview, device: %p, window: %p", cameraDevice_, cmd.window);
                 }
+                LOGI("Thread: START_PREVIEW finished");
                 break;
             case CommandType::STOP_PREVIEW:
-                LOGI("Thread: Stopping Preview");
+                LOGI("Thread: Executing STOP_PREVIEW");
                 StopPreview_Internal();
+                LOGI("Thread: STOP_PREVIEW finished");
                 break;
             case CommandType::EXIT:
-                LOGI("Thread: Exiting");
+                LOGI("Thread: Executing EXIT");
                 CloseCamera_Internal();
                 return;
         }
@@ -114,6 +131,7 @@ void CameraEngine::RunCommandLoop() {
 void CameraEngine::CloseCamera_Internal() {
     StopPreview_Internal();
     if (cameraDevice_) {
+        LOGI("Internal: Closing Camera Device");
         ACameraDevice_close(cameraDevice_);
         cameraDevice_ = nullptr;
     }
@@ -121,6 +139,8 @@ void CameraEngine::CloseCamera_Internal() {
 
 void CameraEngine::StopPreview_Internal() {
     if (captureSession_) {
+        LOGI("Internal: Stopping Session");
+        // Use a non-blocking stop if possible, but NDK is often synchronous here
         ACameraCaptureSession_stopRepeating(captureSession_);
         ACameraCaptureSession_close(captureSession_);
         captureSession_ = nullptr;
@@ -141,9 +161,10 @@ void CameraEngine::StopPreview_Internal() {
         ACameraOutputTarget_free(textureTarget_);
         textureTarget_ = nullptr;
     }
+    LOGI("Internal: Preview Stopped and Resources Freed");
 }
 
-// Callbacks implementation
+// Callbacks
 void CameraEngine::OnDeviceDisconnected(void* context, ACameraDevice* device) {
     LOGI("Callback: Camera Device Disconnected");
 }
