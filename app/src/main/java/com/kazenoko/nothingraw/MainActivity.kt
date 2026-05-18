@@ -1,5 +1,8 @@
 package com.kazenoko.nothingraw
 
+import android.content.Context
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -21,7 +24,27 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val cameraList = getCameraList() ?: emptyArray()
+        val nativeCameras = getCameraList() ?: emptyArray()
+        val allCameras = mutableListOf<String>()
+        
+        // Use Java CameraManager to find hidden physical cameras for debugging
+        val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        try {
+            for (id in manager.cameraIdList) {
+                val chars = manager.getCameraCharacteristics(id)
+                val facing = chars.get(CameraCharacteristics.LENS_FACING)
+                allCameras.add("Logical $id:$facing")
+                
+                val physicalIds = chars.physicalCameraIds
+                for (pId in physicalIds) {
+                    val pChars = manager.getCameraCharacteristics(pId)
+                    val pFacing = pChars.get(CameraCharacteristics.LENS_FACING)
+                    allCameras.add("Physical $pId:$pFacing (from $id)")
+                }
+            }
+        } catch (e: Exception) {
+            allCameras.add("Error: ${e.message}")
+        }
 
         setContent {
             MaterialTheme {
@@ -29,7 +52,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    CameraListScreen(stringFromJNI(), cameraList)
+                    CameraListScreen(stringFromJNI(), nativeCameras, allCameras.toTypedArray())
                 }
             }
         }
@@ -46,7 +69,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun CameraListScreen(status: String, cameras: Array<String>) {
+fun CameraListScreen(status: String, nativeCameras: Array<String>, allCameras: Array<String>) {
     Column(modifier = Modifier.padding(16.dp)) {
         Text(
             text = "Nothing RAW Engine",
@@ -60,28 +83,47 @@ fun CameraListScreen(status: String, cameras: Array<String>) {
         )
         
         Text(
-            text = "Discovered Cameras:",
+            text = "Native Discovery (NDK):",
             style = MaterialTheme.typography.titleLarge,
             modifier = Modifier.padding(bottom = 8.dp)
         )
 
-        LazyColumn {
-            items(cameras.toList()) { camera ->
-                val parts = camera.split(":")
-                val id = parts.getOrNull(0) ?: "Unknown"
-                val facing = when (parts.getOrNull(1)) {
-                    "0" -> "Front"
-                    "1" -> "Back"
-                    "2" -> "External"
-                    else -> "Unknown"
-                }
-                
-                Column(modifier = Modifier.padding(vertical = 8.dp)) {
-                    Text(text = "Camera ID: $id", style = MaterialTheme.typography.bodyLarge)
-                    Text(text = "Facing: $facing", style = MaterialTheme.typography.bodyMedium)
-                }
-                Divider()
+        LazyColumn(modifier = Modifier.weight(1f)) {
+            items(nativeCameras.toList()) { camera ->
+                CameraEntry(camera)
+            }
+        }
+
+        Divider(modifier = Modifier.padding(vertical = 16.dp))
+
+        Text(
+            text = "Extended Discovery (Java):",
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
+
+        LazyColumn(modifier = Modifier.weight(1f)) {
+            items(allCameras.toList()) { camera ->
+                CameraEntry(camera)
             }
         }
     }
+}
+
+@Composable
+fun CameraEntry(camera: String) {
+    val parts = camera.split(":")
+    val idInfo = parts.getOrNull(0) ?: "Unknown"
+    val facing = when (parts.getOrNull(1)) {
+        "0" -> "Front"
+        "1" -> "Back"
+        "2" -> "External"
+        else -> "Unknown"
+    }
+    
+    Column(modifier = Modifier.padding(vertical = 8.dp)) {
+        Text(text = "ID: $idInfo", style = MaterialTheme.typography.bodyLarge)
+        Text(text = "Facing: $facing", style = MaterialTheme.typography.bodyMedium)
+    }
+    Divider()
 }

@@ -35,11 +35,33 @@ std::vector<CameraInfo> CameraManager::GetCameraList() {
         status = ACameraManager_getCameraCharacteristics(cameraManager_, id, &chars);
 
         if (status == ACAMERA_OK && chars != nullptr) {
-            ACameraMetadata_const_entry entry;
-            ACameraMetadata_getConstEntry(chars, ACAMERA_LENS_FACING, &entry);
-            int facing = entry.data.u8[0];
+            ACameraMetadata_const_entry facingEntry;
+            ACameraMetadata_getConstEntry(chars, ACAMERA_LENS_FACING, &facingEntry);
+            int facing = facingEntry.data.u8[0];
 
             cameras.push_back({id, facing});
+
+            // Check if it's a logical camera and find physical IDs
+            ACameraMetadata_const_entry capsEntry;
+            ACameraMetadata_getConstEntry(chars, ACAMERA_REQUEST_AVAILABLE_CAPABILITIES, &capsEntry);
+
+            bool isLogical = false;
+            for (uint32_t j = 0; j < capsEntry.count; ++j) {
+                if (capsEntry.data.u8[j] == ACAMERA_REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA) {
+                    isLogical = true;
+                    break;
+                }
+            }
+
+            if (isLogical) {
+                // In NDK, physical camera IDs are not as easily accessible as in Java
+                // We'll tag these logical cameras so the UI knows there might be more.
+                // However, the goal is to list them.
+                // Let's try to query physical camera IDs if available (API 29+)
+                // For now, we'll append a " (Logical)" suffix to the ID to help debugging.
+                cameras.back().id += " (Logical)";
+            }
+
             ACameraMetadata_free(chars);
         }
     }
