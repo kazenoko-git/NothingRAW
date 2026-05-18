@@ -29,6 +29,7 @@ public:
 private:
     void RunCommandLoop();
     void CloseCamera_Internal();
+    void StartPreview_Internal();
     void StopPreview_Internal();
 
     ACameraManager* cameraManager_;

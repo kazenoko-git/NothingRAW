@@ -74,54 +74,45 @@ void CameraEngine::RunCommandLoop() {
         }
 
         switch (cmd.type) {
-            case CommandType::OPEN:
+            case CommandType::OPEN: {
                 LOGI("Thread: Executing OPEN %s", cmd.cameraId.c_str());
+                // FULL RESET SEQUENCE
                 CloseCamera_Internal();
-                ACameraManager_openCamera(cameraManager_, cmd.cameraId.c_str(), &deviceCallbacks_, &cameraDevice_);
-                LOGI("Thread: OPEN call finished");
+
+                camera_status_t status = ACameraManager_openCamera(cameraManager_, cmd.cameraId.c_str(), &deviceCallbacks_, &cameraDevice_);
+                if (status != ACAMERA_OK) {
+                    LOGE("Thread: Failed to open camera %s, status: %d", cmd.cameraId.c_str(), status);
+                } else {
+                    LOGI("Thread: OPEN call success for %s", cmd.cameraId.c_str());
+                    // If we have a cached window, auto-start preview
+                    if (window_) {
+                        LOGI("Thread: Auto-starting preview for new camera");
+                        StartPreview_Internal();
+                    }
+                }
                 break;
+            }
             case CommandType::CLOSE:
                 LOGI("Thread: Executing CLOSE");
                 CloseCamera_Internal();
-                LOGI("Thread: CLOSE finished");
                 break;
             case CommandType::START_PREVIEW:
                 LOGI("Thread: Executing START_PREVIEW");
-                if (cameraDevice_ && cmd.window) {
+                if (cmd.window) {
                     window_ = cmd.window;
-                    StopPreview_Internal();
-                    ACaptureSessionOutputContainer_create(&outputs_);
-                    ACameraOutputTarget_create(window_, &textureTarget_);
-                    ACaptureSessionOutput_create(window_, &textureOutput_);
-                    ACaptureSessionOutputContainer_add(outputs_, textureOutput_);
-
-                    LOGI("Thread: Creating Session");
-                    ACameraDevice_createCaptureSession(cameraDevice_, outputs_, &sessionCallbacks_, &captureSession_);
-
-                    ACameraDevice_createCaptureRequest(cameraDevice_, TEMPLATE_PREVIEW, &previewRequest_);
-                    ACaptureRequest_addTarget(previewRequest_, textureTarget_);
-
-                    int32_t fpsRange[2] = {60, 60};
-                    ACaptureRequest_setEntry_i32(previewRequest_, ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 2, fpsRange);
-                    uint8_t oisMode = ACAMERA_LENS_OPTICAL_STABILIZATION_MODE_ON;
-                    ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_LENS_OPTICAL_STABILIZATION_MODE, 1, &oisMode);
-                    uint8_t eisMode = ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE_ON;
-                    ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE, 1, &eisMode);
-
-                    LOGI("Thread: Setting Repeating Request");
-                    ACameraCaptureSession_setRepeatingRequest(captureSession_, nullptr, 1, &previewRequest_, nullptr);
-                } else {
-                    LOGE("Thread: Cannot start preview, device: %p, window: %p", cameraDevice_, cmd.window);
+                    if (cameraDevice_) {
+                        StartPreview_Internal();
+                    } else {
+                        LOGI("Thread: Window cached, waiting for camera open");
+                    }
                 }
-                LOGI("Thread: START_PREVIEW finished");
                 break;
             case CommandType::STOP_PREVIEW:
                 LOGI("Thread: Executing STOP_PREVIEW");
                 StopPreview_Internal();
-                LOGI("Thread: STOP_PREVIEW finished");
                 break;
             case CommandType::EXIT:
-                LOGI("Thread: Executing EXIT");
+                LOGI("Thread: Exiting");
                 CloseCamera_Internal();
                 return;
         }
@@ -137,10 +128,49 @@ void CameraEngine::CloseCamera_Internal() {
     }
 }
 
+void CameraEngine::StartPreview_Internal() {
+    if (!cameraDevice_ || !window_) {
+        LOGE("Internal: Cannot start preview, device: %p, window: %p", cameraDevice_, window_);
+        return;
+    }
+
+    StopPreview_Internal(); // Ensure clean slate
+
+    LOGI("Internal: Creating Output Container");
+    ACaptureSessionOutputContainer_create(&outputs_);
+
+    LOGI("Internal: Preparing Output Targets");
+    ACameraOutputTarget_create(window_, &textureTarget_);
+    ACaptureSessionOutput_create(window_, &textureOutput_);
+    ACaptureSessionOutputContainer_add(outputs_, textureOutput_);
+
+    LOGI("Internal: Creating Session");
+    ACameraDevice_createCaptureSession(cameraDevice_, outputs_, &sessionCallbacks_, &captureSession_);
+
+    LOGI("Internal: Creating Preview Request");
+    ACameraDevice_createCaptureRequest(cameraDevice_, TEMPLATE_PREVIEW, &previewRequest_);
+    ACaptureRequest_addTarget(previewRequest_, textureTarget_);
+
+    int32_t fpsRange[2] = {60, 60};
+    ACaptureRequest_setEntry_i32(previewRequest_, ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 2, fpsRange);
+
+    uint8_t oisMode = ACAMERA_LENS_OPTICAL_STABILIZATION_MODE_ON;
+    ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_LENS_OPTICAL_STABILIZATION_MODE, 1, &oisMode);
+
+    uint8_t eisMode = ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE_ON;
+    ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE, 1, &eisMode);
+
+    LOGI("Internal: Setting Repeating Request");
+    camera_status_t status = ACameraCaptureSession_setRepeatingRequest(captureSession_, nullptr, 1, &previewRequest_, nullptr);
+    if (status != ACAMERA_OK) {
+        LOGE("Internal: Failed to set repeating request, status: %d", status);
+    }
+    LOGI("Internal: Preview started successfully");
+}
+
 void CameraEngine::StopPreview_Internal() {
     if (captureSession_) {
         LOGI("Internal: Stopping Session");
-        // Use a non-blocking stop if possible, but NDK is often synchronous here
         ACameraCaptureSession_stopRepeating(captureSession_);
         ACameraCaptureSession_close(captureSession_);
         captureSession_ = nullptr;
@@ -161,7 +191,6 @@ void CameraEngine::StopPreview_Internal() {
         ACameraOutputTarget_free(textureTarget_);
         textureTarget_ = nullptr;
     }
-    LOGI("Internal: Preview Stopped and Resources Freed");
 }
 
 // Callbacks
