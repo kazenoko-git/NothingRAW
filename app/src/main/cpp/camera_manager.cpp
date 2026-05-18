@@ -1,5 +1,7 @@
 #include "camera_manager.h"
 #include <android/log.h>
+#include <vector>
+#include <string>
 
 #define TAG "NothingRAW_CameraManager"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -20,53 +22,55 @@ CameraManager::~CameraManager() {
 
 std::vector<CameraInfo> CameraManager::GetCameraList() {
     std::vector<CameraInfo> cameras;
+
+    // 1. Standard Discovery
     ACameraIdList* cameraIdList = nullptr;
     camera_status_t status = ACameraManager_getCameraIdList(cameraManager_, &cameraIdList);
 
-    if (status != ACAMERA_OK || cameraIdList == nullptr) {
-        LOGE("Failed to get camera ID list, status: %d", status);
-        return cameras;
+    if (status == ACAMERA_OK && cameraIdList != nullptr) {
+        for (int i = 0; i < cameraIdList->numCameras; ++i) {
+            const char* id = cameraIdList->cameraIds[i];
+            ACameraMetadata* chars = nullptr;
+            status = ACameraManager_getCameraCharacteristics(cameraManager_, id, &chars);
+            if (status == ACAMERA_OK && chars != nullptr) {
+                ACameraMetadata_const_entry entry;
+                ACameraMetadata_getConstEntry(chars, ACAMERA_LENS_FACING, &entry);
+                int facing = entry.data.u8[0];
+                cameras.push_back({id, facing});
+                ACameraMetadata_free(chars);
+            }
+        }
+        ACameraManager_deleteCameraIdList(cameraIdList);
     }
 
-    for (int i = 0; i < cameraIdList->numCameras; ++i) {
-        const char* id = cameraIdList->cameraIds[i];
-
+    // 2. Brute-Force Discovery (Testing IDs 2-10)
+    // On some devices, physical IDs are not in the list but can still be queried directly.
+    for (int i = 2; i <= 10; ++i) {
+        std::string testId = std::to_string(i);
         ACameraMetadata* chars = nullptr;
-        status = ACameraManager_getCameraCharacteristics(cameraManager_, id, &chars);
+        status = ACameraManager_getCameraCharacteristics(cameraManager_, testId.c_str(), &chars);
 
         if (status == ACAMERA_OK && chars != nullptr) {
-            ACameraMetadata_const_entry facingEntry;
-            ACameraMetadata_getConstEntry(chars, ACAMERA_LENS_FACING, &facingEntry);
-            int facing = facingEntry.data.u8[0];
+            ACameraMetadata_const_entry entry;
+            ACameraMetadata_getConstEntry(chars, ACAMERA_LENS_FACING, &entry);
+            int facing = entry.data.u8[0];
 
-            cameras.push_back({id, facing});
-
-            // Check if it's a logical camera and find physical IDs
-            ACameraMetadata_const_entry capsEntry;
-            ACameraMetadata_getConstEntry(chars, ACAMERA_REQUEST_AVAILABLE_CAPABILITIES, &capsEntry);
-
-            bool isLogical = false;
-            for (uint32_t j = 0; j < capsEntry.count; ++j) {
-                if (capsEntry.data.u8[j] == ACAMERA_REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA) {
-                    isLogical = true;
+            // Check if we already have this ID
+            bool exists = false;
+            for (const auto& cam : cameras) {
+                if (cam.id == testId) {
+                    exists = true;
                     break;
                 }
             }
 
-            if (isLogical) {
-                // In NDK, physical camera IDs are not as easily accessible as in Java
-                // We'll tag these logical cameras so the UI knows there might be more.
-                // However, the goal is to list them.
-                // Let's try to query physical camera IDs if available (API 29+)
-                // For now, we'll append a " (Logical)" suffix to the ID to help debugging.
-                cameras.back().id += " (Logical)";
+            if (!exists) {
+                cameras.push_back({testId + " (Unmasked)", facing});
             }
-
             ACameraMetadata_free(chars);
         }
     }
 
-    ACameraManager_deleteCameraIdList(cameraIdList);
     return cameras;
 }
 
