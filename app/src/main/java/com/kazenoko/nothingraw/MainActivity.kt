@@ -17,7 +17,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -30,7 +29,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Force Landscape for Cinematic feel and to resolve orientation warp
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
 
         setContent {
@@ -77,7 +75,6 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun CameraDashboard(nativeCameras: Array<String>) {
         Box(modifier = Modifier.fillMaxSize()) {
-            // Camera Preview Layer with fixed Aspect Ratio (16:9 for cinema)
             if (activeCameraId != null) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     AspectRatioBox(ratio = 16f / 9f) {
@@ -86,7 +83,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // UI Overlay
             Row(modifier = Modifier.fillMaxSize().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column {
                     Text(
@@ -95,13 +91,11 @@ class MainActivity : ComponentActivity() {
                         color = Color.White
                     )
                     CameraSelector(nativeCameras) { id ->
-                        stopCamera()
                         activeCameraId = id.split("|")[0].trim()
                         openCamera(activeCameraId!!)
                     }
                 }
                 
-                // Real-time Stats
                 Column(horizontalAlignment = Alignment.End) {
                     Text(text = "FPS: 60 (FORCED)", color = Color.Green, style = MaterialTheme.typography.labelLarge)
                     activeCameraId?.let {
@@ -151,12 +145,11 @@ class MainActivity : ComponentActivity() {
                             startPreview(holder.surface)
                         }
                         override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
-                        override fun surfaceDestroyed(holder: SurfaceHolder) {
-                            stopCamera()
-                        }
+                        override fun surfaceDestroyed(holder: SurfaceHolder) {}
                     })
                 }
-            }
+            },
+            update = { /* Re-start preview if camera ID changes */ }
         )
     }
 
@@ -186,7 +179,7 @@ class MainActivity : ComponentActivity() {
 
     external fun stringFromJNI(): String
     external fun getCameraList(): Array<String>?
-    external fun openCamera(cameraId: String): Int
+    external fun openCamera(cameraId: String)
     external fun startPreview(surface: Surface)
     external fun stopCamera()
 

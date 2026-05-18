@@ -27,26 +27,18 @@ Java_com_kazenoko_nothingraw_MainActivity_getCameraList(
     return result;
 }
 
-extern "C" JNIEXPORT jint JNICALL
+extern "C" JNIEXPORT void JNICALL
 Java_com_kazenoko_nothingraw_MainActivity_openCamera(
         JNIEnv* env,
         jobject /* this */,
         jstring cameraId) {
-    if (!gCameraManager) {
-        gCameraManager = new nothingraw::CameraManager();
-    }
     if (!gCameraEngine) {
-        // Pass ACameraManager* from our CameraManager wrapper
-        // Note: We need a way to get the internal pointer.
-        // For simplicity in this JNI, I'll modify camera_manager.h to expose it or just create a local one.
         gCameraEngine = new nothingraw::CameraEngine(ACameraManager_create());
     }
 
     const char* id = env->GetStringUTFChars(cameraId, nullptr);
-    camera_status_t status = gCameraEngine->OpenCamera(id);
+    gCameraEngine->OpenCamera(id);
     env->ReleaseStringUTFChars(cameraId, id);
-
-    return static_cast<jint>(status);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -73,6 +65,6 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_kazenoko_nothingraw_MainActivity_stringFromJNI(
         JNIEnv* env,
         jobject /* this */) {
-    std::string hello = "Nothing RAW Engine v0.2-alpha";
+    std::string hello = "Nothing RAW Engine v0.3-threaded";
     return env->NewStringUTF(hello.c_str());
 }
