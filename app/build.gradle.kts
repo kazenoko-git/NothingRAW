@@ -8,7 +8,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.kazenoko.nothingraw"
+        applicationId = "org.codeaurora.snapcam"
         minSdk = 35
         targetSdk = 36
         versionCode = 1

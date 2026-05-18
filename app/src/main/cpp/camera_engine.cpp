@@ -6,13 +6,12 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-// Forward declare to bypass header issues if any, but ensure it's linked
 extern "C" void ACaptureSessionOutput_setPhysicalCameraId(ACaptureSessionOutput* output, const char* physicalId) __attribute__((weak));
 
 namespace nothingraw {
 
 CameraEngine::CameraEngine(ACameraManager* manager) : cameraManager_(manager) {
-    LOGI("Engine: Initializing");
+    LOGI("Engine: Initializing (SPOOFED)");
     deviceCallbacks_.context = this;
     deviceCallbacks_.onDisconnected = OnDeviceDisconnected;
     deviceCallbacks_.onError = OnDeviceError;
@@ -146,37 +145,48 @@ void CameraEngine::StartPreview_Internal() {
     ACameraOutputTarget_create(window_, &textureTarget_);
     ACaptureSessionOutput_create(window_, &textureOutput_);
 
-    // NUCLEAR OPTION: PHYSICAL ID LINKAGE (Weakly linked for safety)
     if (!targetPhysicalId_.empty() && ACaptureSessionOutput_setPhysicalCameraId != nullptr) {
-        LOGI("Internal: Linking Surface to Physical ID: %s", targetPhysicalId_.c_str());
         ACaptureSessionOutput_setPhysicalCameraId(textureOutput_, targetPhysicalId_.c_str());
     }
 
     ACaptureSessionOutputContainer_add(outputs_, textureOutput_);
 
+    // Switch to TEMPLATE_RECORD (often provides wider FOV than TEMPLATE_PREVIEW)
     ACameraDevice_createCaptureSession(cameraDevice_, outputs_, &sessionCallbacks_, &captureSession_);
-    ACameraDevice_createCaptureRequest(cameraDevice_, TEMPLATE_PREVIEW, &previewRequest_);
+    ACameraDevice_createCaptureRequest(cameraDevice_, TEMPLATE_RECORD, &previewRequest_);
     ACaptureRequest_addTarget(previewRequest_, textureTarget_);
 
+    // 60 FPS UNLOCK
     int32_t fpsRange[2] = {60, 60};
     ACaptureRequest_setEntry_i32(previewRequest_, ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 2, fpsRange);
 
     float zoom = zoomRatio_;
     ACaptureRequest_setEntry_float(previewRequest_, ACAMERA_CONTROL_ZOOM_RATIO, 1, &zoom);
 
+    // DISABLE ALL PROCESSING Musher
     uint8_t off = 0;
     ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_LENS_OPTICAL_STABILIZATION_MODE, 1, &off);
     ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE, 1, &off);
     ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_NOISE_REDUCTION_MODE, 1, &off);
     ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_EDGE_MODE, 1, &off);
     ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_DISTORTION_CORRECTION_MODE, 1, &off);
+    ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_HOT_PIXEL_MODE, 1, &off);
+    ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_SHADING_MODE, 1, &off);
 
     if (!activeArray_.empty()) {
         ACaptureRequest_setEntry_i32(previewRequest_, ACAMERA_SCALER_CROP_REGION, 4, activeArray_.data());
     }
 
+    // --- QUALCOMM VENDOR TAG BYPASS ---
+    // We'll attempt to set some well-known Qualcomm tags to enable all aux cameras
+    // 0x01 = Enable, 0x00 = Disable
+    uint8_t qcomEnable = 1;
+    // com.qti.chi.multicameraconfig.MultiCameraConfig = 0x80040001 (Example)
+    // Since we don't have the tag map, we'll try to sniff them or use standard IDs.
+    // Most Nothing Phones respond to package spoofing better than vendor tags.
+
     ACameraCaptureSession_setRepeatingRequest(captureSession_, nullptr, 1, &previewRequest_, nullptr);
-    LOGI("Internal: Preview started with Physical Linkage: %s", targetPhysicalId_.c_str());
+    LOGI("Internal: Preview started (RECORD TEMPLATE + ALL OFF)");
 }
 
 void CameraEngine::StopPreview_Internal() {
