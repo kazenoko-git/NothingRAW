@@ -22,6 +22,9 @@ public:
     void StopPreview();
 
 private:
+    void CloseCamera_Internal();
+    void StopPreview_Internal();
+
     ACameraManager* cameraManager_;
     ACameraDevice* cameraDevice_ = nullptr;
     ACameraCaptureSession* captureSession_ = nullptr;
