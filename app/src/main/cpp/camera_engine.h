@@ -7,6 +7,11 @@
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
 #include <string>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <queue>
+#include <atomic>
 
 namespace nothingraw {
 
@@ -15,13 +20,14 @@ public:
     CameraEngine(ACameraManager* manager);
     ~CameraEngine();
 
-    camera_status_t OpenCamera(const std::string& id);
+    void OpenCamera(const std::string& id);
     void CloseCamera();
 
-    camera_status_t StartPreview(ANativeWindow* window);
+    void StartPreview(ANativeWindow* window);
     void StopPreview();
 
 private:
+    void RunCommandLoop();
     void CloseCamera_Internal();
     void StopPreview_Internal();
 
@@ -33,6 +39,19 @@ private:
     ACaptureSessionOutputContainer* outputs_ = nullptr;
     ACaptureRequest* previewRequest_ = nullptr;
     ANativeWindow* window_ = nullptr;
+
+    // Command Queue for Thread Safety
+    enum class CommandType { OPEN, CLOSE, START_PREVIEW, STOP_PREVIEW, EXIT };
+    struct Command {
+        CommandType type;
+        std::string cameraId;
+        ANativeWindow* window;
+    };
+    std::queue<Command> commandQueue_;
+    std::mutex queueMutex_;
+    std::condition_variable queueCondition_;
+    std::thread workerThread_;
+    std::atomic<bool> isRunning_{true};
 
     // Callbacks
     static void OnDeviceDisconnected(void* context, ACameraDevice* device);

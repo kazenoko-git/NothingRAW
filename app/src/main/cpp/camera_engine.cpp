@@ -1,14 +1,11 @@
 #include "camera_engine.h"
 #include <android/log.h>
-#include <mutex>
 
 #define TAG "NothingRAW_CameraEngine"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 namespace nothingraw {
-
-static std::mutex gEngineMutex;
 
 CameraEngine::CameraEngine(ACameraManager* manager) : cameraManager_(manager) {
     deviceCallbacks_.context = this;
@@ -19,25 +16,99 @@ CameraEngine::CameraEngine(ACameraManager* manager) : cameraManager_(manager) {
     sessionCallbacks_.onActive = OnSessionActive;
     sessionCallbacks_.onReady = OnSessionReady;
     sessionCallbacks_.onClosed = OnSessionClosed;
+
+    workerThread_ = std::thread(&CameraEngine::RunCommandLoop, this);
 }
 
 CameraEngine::~CameraEngine() {
-    CloseCamera();
+    {
+        std::lock_guard<std::mutex> lock(queueMutex_);
+        isRunning_ = false;
+        commandQueue_.push({CommandType::EXIT, "", nullptr});
+    }
+    queueCondition_.notify_one();
+    if (workerThread_.joinable()) {
+        workerThread_.join();
+    }
 }
 
-camera_status_t CameraEngine::OpenCamera(const std::string& id) {
-    std::lock_guard<std::mutex> lock(gEngineMutex);
-    LOGI("Opening Camera ID: %s", id.c_str());
-
-    // Safety: ensure everything is closed before re-opening
-    CloseCamera_Internal();
-
-    return ACameraManager_openCamera(cameraManager_, id.c_str(), &deviceCallbacks_, &cameraDevice_);
+void CameraEngine::OpenCamera(const std::string& id) {
+    std::lock_guard<std::mutex> lock(queueMutex_);
+    commandQueue_.push({CommandType::OPEN, id, nullptr});
+    queueCondition_.notify_one();
 }
 
 void CameraEngine::CloseCamera() {
-    std::lock_guard<std::mutex> lock(gEngineMutex);
-    CloseCamera_Internal();
+    std::lock_guard<std::mutex> lock(queueMutex_);
+    commandQueue_.push({CommandType::CLOSE, "", nullptr});
+    queueCondition_.notify_one();
+}
+
+void CameraEngine::StartPreview(ANativeWindow* window) {
+    std::lock_guard<std::mutex> lock(queueMutex_);
+    commandQueue_.push({CommandType::START_PREVIEW, "", window});
+    queueCondition_.notify_one();
+}
+
+void CameraEngine::StopPreview() {
+    std::lock_guard<std::mutex> lock(queueMutex_);
+    commandQueue_.push({CommandType::STOP_PREVIEW, "", nullptr});
+    queueCondition_.notify_one();
+}
+
+void CameraEngine::RunCommandLoop() {
+    while (isRunning_) {
+        Command cmd;
+        {
+            std::unique_lock<std::mutex> lock(queueMutex_);
+            queueCondition_.wait(lock, [this] { return !commandQueue_.empty(); });
+            cmd = std::move(commandQueue_.front());
+            commandQueue_.pop();
+        }
+
+        switch (cmd.type) {
+            case CommandType::OPEN:
+                LOGI("Thread: Opening Camera ID: %s", cmd.cameraId.c_str());
+                CloseCamera_Internal();
+                ACameraManager_openCamera(cameraManager_, cmd.cameraId.c_str(), &deviceCallbacks_, &cameraDevice_);
+                break;
+            case CommandType::CLOSE:
+                LOGI("Thread: Closing Camera");
+                CloseCamera_Internal();
+                break;
+            case CommandType::START_PREVIEW:
+                LOGI("Thread: Starting Preview");
+                if (cameraDevice_ && cmd.window) {
+                    window_ = cmd.window;
+                    StopPreview_Internal();
+                    ACaptureSessionOutputContainer_create(&outputs_);
+                    ACameraOutputTarget_create(window_, &textureTarget_);
+                    ACaptureSessionOutput_create(window_, &textureOutput_);
+                    ACaptureSessionOutputContainer_add(outputs_, textureOutput_);
+                    ACameraDevice_createCaptureSession(cameraDevice_, outputs_, &sessionCallbacks_, &captureSession_);
+                    ACameraDevice_createCaptureRequest(cameraDevice_, TEMPLATE_PREVIEW, &previewRequest_);
+                    ACaptureRequest_addTarget(previewRequest_, textureTarget_);
+
+                    int32_t fpsRange[2] = {60, 60};
+                    ACaptureRequest_setEntry_i32(previewRequest_, ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 2, fpsRange);
+                    uint8_t oisMode = ACAMERA_LENS_OPTICAL_STABILIZATION_MODE_ON;
+                    ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_LENS_OPTICAL_STABILIZATION_MODE, 1, &oisMode);
+                    uint8_t eisMode = ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE_ON;
+                    ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE, 1, &eisMode);
+
+                    ACameraCaptureSession_setRepeatingRequest(captureSession_, nullptr, 1, &previewRequest_, nullptr);
+                }
+                break;
+            case CommandType::STOP_PREVIEW:
+                LOGI("Thread: Stopping Preview");
+                StopPreview_Internal();
+                break;
+            case CommandType::EXIT:
+                LOGI("Thread: Exiting");
+                CloseCamera_Internal();
+                return;
+        }
+    }
 }
 
 void CameraEngine::CloseCamera_Internal() {
@@ -46,49 +117,6 @@ void CameraEngine::CloseCamera_Internal() {
         ACameraDevice_close(cameraDevice_);
         cameraDevice_ = nullptr;
     }
-}
-
-camera_status_t CameraEngine::StartPreview(ANativeWindow* window) {
-    std::lock_guard<std::mutex> lock(gEngineMutex);
-    if (!cameraDevice_ || !window) return ACAMERA_ERROR_INVALID_PARAMETER;
-
-    // Safety: stop existing preview
-    StopPreview_Internal();
-    window_ = window;
-
-    // 1. Create Output Container
-    ACaptureSessionOutputContainer_create(&outputs_);
-
-    // 2. Prepare Output for Surface
-    ACameraOutputTarget_create(window, &textureTarget_);
-    ACaptureSessionOutput_create(window, &textureOutput_);
-    ACaptureSessionOutputContainer_add(outputs_, textureOutput_);
-
-    // 3. Create Capture Session
-    ACameraDevice_createCaptureSession(cameraDevice_, outputs_, &sessionCallbacks_, &captureSession_);
-
-    // 4. Create Preview Request
-    ACameraDevice_createCaptureRequest(cameraDevice_, TEMPLATE_PREVIEW, &previewRequest_);
-    ACaptureRequest_addTarget(previewRequest_, textureTarget_);
-
-    // CRITICAL: FORCE UNLOCK 60 FPS
-    int32_t fpsRange[2] = {60, 60};
-    ACaptureRequest_setEntry_i32(previewRequest_, ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 2, fpsRange);
-
-    // STABILITY: Enable OIS and EIS (Optical and Video Stabilization)
-    uint8_t oisMode = ACAMERA_LENS_OPTICAL_STABILIZATION_MODE_ON;
-    ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_LENS_OPTICAL_STABILIZATION_MODE, 1, &oisMode);
-
-    uint8_t eisMode = ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE_ON;
-    ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE, 1, &eisMode);
-
-    // 5. Start Repeating Request
-    return ACameraCaptureSession_setRepeatingRequest(captureSession_, nullptr, 1, &previewRequest_, nullptr);
-}
-
-void CameraEngine::StopPreview() {
-    std::lock_guard<std::mutex> lock(gEngineMutex);
-    StopPreview_Internal();
 }
 
 void CameraEngine::StopPreview_Internal() {
@@ -117,23 +145,23 @@ void CameraEngine::StopPreview_Internal() {
 
 // Callbacks implementation
 void CameraEngine::OnDeviceDisconnected(void* context, ACameraDevice* device) {
-    LOGI("Camera Device Disconnected");
+    LOGI("Callback: Camera Device Disconnected");
 }
 
 void CameraEngine::OnDeviceError(void* context, ACameraDevice* device, int error) {
-    LOGE("Camera Device Error: %d", error);
+    LOGE("Callback: Camera Device Error: %d", error);
 }
 
 void CameraEngine::OnSessionActive(void* context, ACameraCaptureSession* session) {
-    LOGI("Camera Session Active");
+    LOGI("Callback: Camera Session Active");
 }
 
 void CameraEngine::OnSessionReady(void* context, ACameraCaptureSession* session) {
-    LOGI("Camera Session Ready");
+    LOGI("Callback: Camera Session Ready");
 }
 
 void CameraEngine::OnSessionClosed(void* context, ACameraCaptureSession* session) {
-    LOGI("Camera Session Closed");
+    LOGI("Callback: Camera Session Closed");
 }
 
 } // namespace nothingraw
