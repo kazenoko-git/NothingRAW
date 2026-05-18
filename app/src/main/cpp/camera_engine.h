@@ -27,6 +27,8 @@ public:
     void StartPreview(ANativeWindow* window);
     void StopPreview();
 
+    void SetZoom(float ratio);
+
 private:
     void RunCommandLoop();
     void CloseCamera_Internal();
@@ -42,15 +44,15 @@ private:
     ACaptureRequest* previewRequest_ = nullptr;
     ANativeWindow* window_ = nullptr;
 
-    // Sensor Geometry
+    float zoomRatio_ = 1.0f;
     std::vector<int32_t> activeArray_;
 
-    // Command Queue for Thread Safety
-    enum class CommandType { OPEN, CLOSE, START_PREVIEW, STOP_PREVIEW, EXIT };
+    enum class CommandType { OPEN, CLOSE, START_PREVIEW, STOP_PREVIEW, SET_ZOOM, EXIT };
     struct Command {
         CommandType type;
         std::string cameraId;
         ANativeWindow* window;
+        float zoomRatio;
     };
     std::queue<Command> commandQueue_;
     std::mutex queueMutex_;

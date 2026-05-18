@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.util.Log
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -31,6 +30,7 @@ import androidx.core.content.ContextCompat
 class MainActivity : ComponentActivity() {
 
     private var activeCameraId by mutableStateOf<String?>(null)
+    private var currentZoom by mutableStateOf(1.0f)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -90,15 +90,15 @@ class MainActivity : ComponentActivity() {
             }
 
             Row(modifier = Modifier.fillMaxSize().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                Column(modifier = Modifier.width(350.dp).background(Color.Black.copy(alpha = 0.6f)).padding(8.dp)) {
+                Column(modifier = Modifier.width(300.dp).background(Color.Black.copy(alpha = 0.6f)).padding(8.dp)) {
                     Text(
-                        text = "NOTHING RAW FORENSICS",
+                        text = "NOTHING RAW PRO",
                         style = MaterialTheme.typography.titleSmall,
                         color = Color.Yellow,
                         fontWeight = FontWeight.Bold
                     )
                     
-                    LazyColumn(modifier = Modifier.fillMaxHeight()) {
+                    LazyColumn(modifier = Modifier.weight(1f)) {
                         items(nativeCameras.toList()) { camera ->
                             val parts = camera.split("|")
                             val id = parts.getOrNull(0)?.trim() ?: ""
@@ -110,35 +110,41 @@ class MainActivity : ComponentActivity() {
                                     .padding(vertical = 4.dp)
                                     .background(if (isSelected) Color.DarkGray else Color.Transparent)
                                     .padding(4.dp)
-                                    .padding(bottom = 4.dp)
-                                    .padding(horizontal = 4.dp)
-                                    .padding(top = 4.dp)
-                                    .padding(start = 4.dp)
-                                    .padding(end = 4.dp)
                             ) {
-                                Text(text = "SENSOR ID: $id", color = if (isSelected) Color.Cyan else Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                Text(text = camera.substringAfter("|").trim(), color = Color.LightGray, fontSize = 10.sp, lineHeight = 12.sp)
+                                Text(text = "ID: $id", color = if (isSelected) Color.Cyan else Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                Text(text = camera.substringAfter("|").trim(), color = Color.LightGray, fontSize = 8.sp, lineHeight = 10.sp)
                                 Button(
                                     onClick = {
                                         activeCameraId = id
+                                        currentZoom = 1.0f
                                         openCamera(id)
                                     },
-                                    modifier = Modifier.height(24.dp).padding(top = 4.dp),
+                                    modifier = Modifier.height(20.dp).padding(top = 2.dp),
                                     contentPadding = PaddingValues(0.dp)
                                 ) {
-                                    Text("OPEN", fontSize = 10.sp)
+                                    Text("OPEN", fontSize = 8.sp)
                                 }
                             }
-                            Divider(color = Color.Gray, thickness = 0.5.dp)
+                            HorizontalDivider(color = Color.Gray, thickness = 0.5.dp)
                         }
                     }
                 }
                 
-                Column(horizontalAlignment = Alignment.End) {
+                Column(horizontalAlignment = Alignment.End, modifier = Modifier.width(200.dp)) {
                     Text(text = "FPS: 60 (FORCED)", color = Color.Green, style = MaterialTheme.typography.labelLarge)
-                    activeCameraId?.let {
-                        Text(text = "ACTIVE SENSOR: $it", color = Color.White, style = MaterialTheme.typography.labelSmall)
-                    }
+                    Text(text = "ZOOM: ${"%.1f".format(currentZoom)}x", color = Color.White)
+                    
+                    Slider(
+                        value = currentZoom,
+                        onValueChange = { 
+                            currentZoom = it
+                            setZoom(it)
+                        },
+                        valueRange = 0.6f..10f,
+                        modifier = Modifier.padding(top = 16.dp)
+                    )
+                    
+                    Text(text = "MANUAL OVERRIDE", color = Color.Red, style = MaterialTheme.typography.labelSmall)
                 }
             }
         }
@@ -195,6 +201,7 @@ class MainActivity : ComponentActivity() {
     external fun openCamera(cameraId: String)
     external fun startPreview(surface: Surface)
     external fun stopCamera()
+    external fun setZoom(ratio: Float)
 
     companion object {
         init {

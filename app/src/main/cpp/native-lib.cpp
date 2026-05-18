@@ -61,6 +61,16 @@ Java_com_kazenoko_nothingraw_MainActivity_stopCamera(
     }
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_kazenoko_nothingraw_MainActivity_setZoom(
+        JNIEnv* env,
+        jobject /* this */,
+        jfloat ratio) {
+    if (gCameraEngine) {
+        gCameraEngine->SetZoom(ratio);
+    }
+}
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_kazenoko_nothingraw_MainActivity_stringFromJNI(
         JNIEnv* env,

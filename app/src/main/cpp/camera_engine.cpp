@@ -26,7 +26,7 @@ CameraEngine::~CameraEngine() {
     {
         std::lock_guard<std::mutex> lock(queueMutex_);
         isRunning_ = false;
-        commandQueue_.push({CommandType::EXIT, "", nullptr});
+        commandQueue_.push({CommandType::EXIT, "", nullptr, 1.0f});
     }
     queueCondition_.notify_one();
     if (workerThread_.joinable()) {
@@ -37,28 +37,35 @@ CameraEngine::~CameraEngine() {
 void CameraEngine::OpenCamera(const std::string& id) {
     LOGI("JNI: Queueing OpenCamera %s", id.c_str());
     std::lock_guard<std::mutex> lock(queueMutex_);
-    commandQueue_.push({CommandType::OPEN, id, nullptr});
+    commandQueue_.push({CommandType::OPEN, id, nullptr, 1.0f});
     queueCondition_.notify_one();
 }
 
 void CameraEngine::CloseCamera() {
     LOGI("JNI: Queueing CloseCamera");
     std::lock_guard<std::mutex> lock(queueMutex_);
-    commandQueue_.push({CommandType::CLOSE, "", nullptr});
+    commandQueue_.push({CommandType::CLOSE, "", nullptr, 1.0f});
     queueCondition_.notify_one();
 }
 
 void CameraEngine::StartPreview(ANativeWindow* window) {
     LOGI("JNI: Queueing StartPreview");
     std::lock_guard<std::mutex> lock(queueMutex_);
-    commandQueue_.push({CommandType::START_PREVIEW, "", window});
+    commandQueue_.push({CommandType::START_PREVIEW, "", window, 1.0f});
     queueCondition_.notify_one();
 }
 
 void CameraEngine::StopPreview() {
     LOGI("JNI: Queueing StopPreview");
     std::lock_guard<std::mutex> lock(queueMutex_);
-    commandQueue_.push({CommandType::STOP_PREVIEW, "", nullptr});
+    commandQueue_.push({CommandType::STOP_PREVIEW, "", nullptr, 1.0f});
+    queueCondition_.notify_one();
+}
+
+void CameraEngine::SetZoom(float ratio) {
+    LOGI("JNI: Queueing SetZoom %f", ratio);
+    std::lock_guard<std::mutex> lock(queueMutex_);
+    commandQueue_.push({CommandType::SET_ZOOM, "", nullptr, ratio});
     queueCondition_.notify_one();
 }
 
@@ -78,7 +85,6 @@ void CameraEngine::RunCommandLoop() {
                 LOGI("Thread: Executing OPEN %s", cmd.cameraId.c_str());
                 CloseCamera_Internal();
 
-                // Get sensor metadata to reset zoom later
                 ACameraMetadata* chars = nullptr;
                 ACameraManager_getCameraCharacteristics(cameraManager_, cmd.cameraId.c_str(), &chars);
                 if (chars) {
@@ -86,45 +92,36 @@ void CameraEngine::RunCommandLoop() {
                     ACameraMetadata_getConstEntry(chars, ACAMERA_SENSOR_INFO_ACTIVE_ARRAY_SIZE, &entry);
                     if (entry.count == 4) {
                         activeArray_ = {entry.data.i32[0], entry.data.i32[1], entry.data.i32[2], entry.data.i32[3]};
-                        LOGI("Thread: Active Array for %s: [%d, %d, %d, %d]", cmd.cameraId.c_str(),
-                             activeArray_[0], activeArray_[1], activeArray_[2], activeArray_[3]);
                     }
                     ACameraMetadata_free(chars);
                 }
 
                 camera_status_t status = ACameraManager_openCamera(cameraManager_, cmd.cameraId.c_str(), &deviceCallbacks_, &cameraDevice_);
-                if (status != ACAMERA_OK) {
-                    LOGE("Thread: Failed to open camera %s, status: %d", cmd.cameraId.c_str(), status);
-                } else {
-                    LOGI("Thread: OPEN call success for %s", cmd.cameraId.c_str());
-                    if (window_) {
-                        LOGI("Thread: Auto-starting preview for new camera");
-                        StartPreview_Internal();
-                    }
+                if (status == ACAMERA_OK && window_) {
+                    StartPreview_Internal();
                 }
                 break;
             }
             case CommandType::CLOSE:
-                LOGI("Thread: Executing CLOSE");
                 CloseCamera_Internal();
                 break;
             case CommandType::START_PREVIEW:
-                LOGI("Thread: Executing START_PREVIEW");
                 if (cmd.window) {
                     window_ = cmd.window;
-                    if (cameraDevice_) {
-                        StartPreview_Internal();
-                    } else {
-                        LOGI("Thread: Window cached, waiting for camera open");
-                    }
+                    if (cameraDevice_) StartPreview_Internal();
                 }
                 break;
             case CommandType::STOP_PREVIEW:
-                LOGI("Thread: Executing STOP_PREVIEW");
                 StopPreview_Internal();
                 break;
+            case CommandType::SET_ZOOM:
+                zoomRatio_ = cmd.zoomRatio;
+                if (captureSession_ && previewRequest_) {
+                    ACaptureRequest_setEntry_float(previewRequest_, ACAMERA_CONTROL_ZOOM_RATIO, 1, &zoomRatio_);
+                    ACameraCaptureSession_setRepeatingRequest(captureSession_, nullptr, 1, &previewRequest_, nullptr);
+                }
+                break;
             case CommandType::EXIT:
-                LOGI("Thread: Exiting");
                 CloseCamera_Internal();
                 return;
         }
@@ -134,17 +131,13 @@ void CameraEngine::RunCommandLoop() {
 void CameraEngine::CloseCamera_Internal() {
     StopPreview_Internal();
     if (cameraDevice_) {
-        LOGI("Internal: Closing Camera Device");
         ACameraDevice_close(cameraDevice_);
         cameraDevice_ = nullptr;
     }
 }
 
 void CameraEngine::StartPreview_Internal() {
-    if (!cameraDevice_ || !window_) {
-        LOGE("Internal: Cannot start preview, device: %p, window: %p", cameraDevice_, window_);
-        return;
-    }
+    if (!cameraDevice_ || !window_) return;
 
     StopPreview_Internal();
 
@@ -157,36 +150,24 @@ void CameraEngine::StartPreview_Internal() {
     ACameraDevice_createCaptureRequest(cameraDevice_, TEMPLATE_PREVIEW, &previewRequest_);
     ACaptureRequest_addTarget(previewRequest_, textureTarget_);
 
-    // 60 FPS UNLOCK
+    // FORCED UNLOCKS
     int32_t fpsRange[2] = {60, 60};
     ACaptureRequest_setEntry_i32(previewRequest_, ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 2, fpsRange);
 
-    // STABILIZATION
+    float zoom = zoomRatio_;
+    ACaptureRequest_setEntry_float(previewRequest_, ACAMERA_CONTROL_ZOOM_RATIO, 1, &zoom);
+
     uint8_t oisMode = ACAMERA_LENS_OPTICAL_STABILIZATION_MODE_ON;
     ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_LENS_OPTICAL_STABILIZATION_MODE, 1, &oisMode);
-    uint8_t eisMode = ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE_ON;
-    ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE, 1, &eisMode);
 
-    // RESTORE TRUE FIELD OF VIEW (Disable default digital zoom)
-    if (!activeArray_.empty()) {
-        LOGI("Internal: Resetting Crop Region to restore FOV");
-        ACaptureRequest_setEntry_i32(previewRequest_, ACAMERA_SCALER_CROP_REGION, 4, activeArray_.data());
-    }
+    uint8_t noiseMode = ACAMERA_NOISE_REDUCTION_MODE_OFF;
+    ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_NOISE_REDUCTION_MODE, 1, &noiseMode);
 
-    // If zoom ratio is supported (API 30+), force to 1.0f
-    float zoomRatio = 1.0f;
-    ACaptureRequest_setEntry_float(previewRequest_, ACAMERA_CONTROL_ZOOM_RATIO, 1, &zoomRatio);
-
-    camera_status_t status = ACameraCaptureSession_setRepeatingRequest(captureSession_, nullptr, 1, &previewRequest_, nullptr);
-    if (status != ACAMERA_OK) {
-        LOGE("Internal: Failed to set repeating request, status: %d", status);
-    }
-    LOGI("Internal: Preview started successfully");
+    ACameraCaptureSession_setRepeatingRequest(captureSession_, nullptr, 1, &previewRequest_, nullptr);
 }
 
 void CameraEngine::StopPreview_Internal() {
     if (captureSession_) {
-        LOGI("Internal: Stopping Session");
         ACameraCaptureSession_stopRepeating(captureSession_);
         ACameraCaptureSession_close(captureSession_);
         captureSession_ = nullptr;
@@ -209,25 +190,11 @@ void CameraEngine::StopPreview_Internal() {
     }
 }
 
-// Callbacks
-void CameraEngine::OnDeviceDisconnected(void* context, ACameraDevice* device) {
-    LOGI("Callback: Camera Device Disconnected");
-}
-
-void CameraEngine::OnDeviceError(void* context, ACameraDevice* device, int error) {
-    LOGE("Callback: Camera Device Error: %d", error);
-}
-
-void CameraEngine::OnSessionActive(void* context, ACameraCaptureSession* session) {
-    LOGI("Callback: Camera Session Active");
-}
-
-void CameraEngine::OnSessionReady(void* context, ACameraCaptureSession* session) {
-    LOGI("Callback: Camera Session Ready");
-}
-
-void CameraEngine::OnSessionClosed(void* context, ACameraCaptureSession* session) {
-    LOGI("Callback: Camera Session Closed");
-}
+// Callbacks (Simplified for brevity)
+void CameraEngine::OnDeviceDisconnected(void* context, ACameraDevice* device) {}
+void CameraEngine::OnDeviceError(void* context, ACameraDevice* device, int error) {}
+void CameraEngine::OnSessionActive(void* context, ACameraCaptureSession* session) {}
+void CameraEngine::OnSessionReady(void* context, ACameraCaptureSession* session) {}
+void CameraEngine::OnSessionClosed(void* context, ACameraCaptureSession* session) {}
 
 } // namespace nothingraw
