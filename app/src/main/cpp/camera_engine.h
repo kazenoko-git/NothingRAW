@@ -12,6 +12,7 @@
 #include <condition_variable>
 #include <queue>
 #include <atomic>
+#include <vector>
 
 namespace nothingraw {
 
@@ -40,6 +41,9 @@ private:
     ACaptureSessionOutputContainer* outputs_ = nullptr;
     ACaptureRequest* previewRequest_ = nullptr;
     ANativeWindow* window_ = nullptr;
+
+    // Sensor Geometry
+    std::vector<int32_t> activeArray_;
 
     // Command Queue for Thread Safety
     enum class CommandType { OPEN, CLOSE, START_PREVIEW, STOP_PREVIEW, EXIT };

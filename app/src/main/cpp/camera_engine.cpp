@@ -76,15 +76,27 @@ void CameraEngine::RunCommandLoop() {
         switch (cmd.type) {
             case CommandType::OPEN: {
                 LOGI("Thread: Executing OPEN %s", cmd.cameraId.c_str());
-                // FULL RESET SEQUENCE
                 CloseCamera_Internal();
+
+                // Get sensor metadata to reset zoom later
+                ACameraMetadata* chars = nullptr;
+                ACameraManager_getCameraCharacteristics(cameraManager_, cmd.cameraId.c_str(), &chars);
+                if (chars) {
+                    ACameraMetadata_const_entry entry;
+                    ACameraMetadata_getConstEntry(chars, ACAMERA_SENSOR_INFO_ACTIVE_ARRAY_SIZE, &entry);
+                    if (entry.count == 4) {
+                        activeArray_ = {entry.data.i32[0], entry.data.i32[1], entry.data.i32[2], entry.data.i32[3]};
+                        LOGI("Thread: Active Array for %s: [%d, %d, %d, %d]", cmd.cameraId.c_str(),
+                             activeArray_[0], activeArray_[1], activeArray_[2], activeArray_[3]);
+                    }
+                    ACameraMetadata_free(chars);
+                }
 
                 camera_status_t status = ACameraManager_openCamera(cameraManager_, cmd.cameraId.c_str(), &deviceCallbacks_, &cameraDevice_);
                 if (status != ACAMERA_OK) {
                     LOGE("Thread: Failed to open camera %s, status: %d", cmd.cameraId.c_str(), status);
                 } else {
                     LOGI("Thread: OPEN call success for %s", cmd.cameraId.c_str());
-                    // If we have a cached window, auto-start preview
                     if (window_) {
                         LOGI("Thread: Auto-starting preview for new camera");
                         StartPreview_Internal();
@@ -134,33 +146,37 @@ void CameraEngine::StartPreview_Internal() {
         return;
     }
 
-    StopPreview_Internal(); // Ensure clean slate
+    StopPreview_Internal();
 
-    LOGI("Internal: Creating Output Container");
     ACaptureSessionOutputContainer_create(&outputs_);
-
-    LOGI("Internal: Preparing Output Targets");
     ACameraOutputTarget_create(window_, &textureTarget_);
     ACaptureSessionOutput_create(window_, &textureOutput_);
     ACaptureSessionOutputContainer_add(outputs_, textureOutput_);
 
-    LOGI("Internal: Creating Session");
     ACameraDevice_createCaptureSession(cameraDevice_, outputs_, &sessionCallbacks_, &captureSession_);
-
-    LOGI("Internal: Creating Preview Request");
     ACameraDevice_createCaptureRequest(cameraDevice_, TEMPLATE_PREVIEW, &previewRequest_);
     ACaptureRequest_addTarget(previewRequest_, textureTarget_);
 
+    // 60 FPS UNLOCK
     int32_t fpsRange[2] = {60, 60};
     ACaptureRequest_setEntry_i32(previewRequest_, ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 2, fpsRange);
 
+    // STABILIZATION
     uint8_t oisMode = ACAMERA_LENS_OPTICAL_STABILIZATION_MODE_ON;
     ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_LENS_OPTICAL_STABILIZATION_MODE, 1, &oisMode);
-
     uint8_t eisMode = ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE_ON;
     ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE, 1, &eisMode);
 
-    LOGI("Internal: Setting Repeating Request");
+    // RESTORE TRUE FIELD OF VIEW (Disable default digital zoom)
+    if (!activeArray_.empty()) {
+        LOGI("Internal: Resetting Crop Region to restore FOV");
+        ACaptureRequest_setEntry_i32(previewRequest_, ACAMERA_SCALER_CROP_REGION, 4, activeArray_.data());
+    }
+
+    // If zoom ratio is supported (API 30+), force to 1.0f
+    float zoomRatio = 1.0f;
+    ACaptureRequest_setEntry_float(previewRequest_, ACAMERA_CONTROL_ZOOM_RATIO, 1, &zoomRatio);
+
     camera_status_t status = ACameraCaptureSession_setRepeatingRequest(captureSession_, nullptr, 1, &previewRequest_, nullptr);
     if (status != ACAMERA_OK) {
         LOGE("Internal: Failed to set repeating request, status: %d", status);
