@@ -1,11 +1,15 @@
 package com.kazenoko.nothingraw
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -16,8 +20,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 
 class MainActivity : ComponentActivity() {
 
@@ -26,51 +32,83 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val nativeCameras = getCameraList() ?: emptyArray()
-
         setContent {
+            var hasCameraPermission by remember {
+                mutableStateOf(
+                    ContextCompat.checkSelfPermission(
+                        this,
+                        Manifest.permission.CAMERA
+                    ) == PackageManager.PERMISSION_GRANTED
+                )
+            }
+
+            val launcher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.RequestPermission(),
+                onResult = { granted ->
+                    hasCameraPermission = granted
+                }
+            )
+
+            LaunchedEffect(Unit) {
+                if (!hasCameraPermission) {
+                    launcher.launch(Manifest.permission.CAMERA)
+                }
+            }
+
             MaterialTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = Color.Black
                 ) {
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        // Camera Preview Layer
-                        if (activeCameraId != null) {
-                            CameraPreview(activeCameraId!!)
-                        } else {
-                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                Text("Select a camera to start preview", color = Color.Gray)
-                            }
+                    if (hasCameraPermission) {
+                        val nativeCameras = getCameraList() ?: emptyArray()
+                        CameraDashboard(nativeCameras)
+                    } else {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text("Camera permission required", color = Color.White)
                         }
-
-                        // UI Overlay
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text(
-                                text = "Nothing RAW Engine",
-                                style = MaterialTheme.typography.headlineSmall,
-                                color = Color.White
-                            )
-                            
-                            Spacer(modifier = Modifier.height(8.dp))
-                            
-                            CameraSelector(nativeCameras) { id ->
-                                stopCamera()
-                                activeCameraId = id.split("|")[0].trim()
-                                openCamera(activeCameraId!!)
-                            }
-                        }
-                        
-                        // FPS Counter (Placeholder for now)
-                        Text(
-                            text = "Target: 60 FPS (Forced)",
-                            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
-                            color = Color.Green,
-                            style = MaterialTheme.typography.labelLarge
-                        )
                     }
                 }
             }
+        }
+    }
+
+    @Composable
+    fun CameraDashboard(nativeCameras: Array<String>) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            // Camera Preview Layer
+            if (activeCameraId != null) {
+                CameraPreview(activeCameraId!!)
+            } else {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("Select a camera to start preview", color = Color.Gray)
+                }
+            }
+
+            // UI Overlay
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "Nothing RAW Engine",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = Color.White
+                )
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                CameraSelector(nativeCameras) { id ->
+                    stopCamera()
+                    activeCameraId = id.split("|")[0].trim()
+                    openCamera(activeCameraId!!)
+                }
+            }
+            
+            // FPS Counter (Placeholder for now)
+            Text(
+                text = "Target: 60 FPS (Forced)",
+                modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+                color = Color.Green,
+                style = MaterialTheme.typography.labelLarge
+            )
         }
     }
 
