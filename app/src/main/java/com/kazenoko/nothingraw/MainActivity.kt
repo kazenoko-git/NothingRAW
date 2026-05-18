@@ -1,8 +1,5 @@
 package com.kazenoko.nothingraw
 
-import android.content.Context
-import android.hardware.camera2.CameraCharacteristics
-import android.hardware.camera2.CameraManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -25,30 +22,6 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         val nativeCameras = getCameraList() ?: emptyArray()
-        val bruteForceCameras = mutableListOf<String>()
-        
-        val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
-        
-        // Brute-force IDs 0-20 to find unlisted sensors
-        for (i in 0..20) {
-            val testId = i.toString()
-            try {
-                val chars = manager.getCameraCharacteristics(testId)
-                val facing = chars.get(CameraCharacteristics.LENS_FACING)
-                val capabilities = chars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
-                val isLogical = capabilities?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA) ?: false
-                
-                var label = "ID $testId: $facing"
-                if (isLogical) {
-                    label += " (Logical)"
-                    val physicalIds = chars.physicalCameraIds
-                    label += " -> Physicals: ${physicalIds.joinToString(",")}"
-                }
-                bruteForceCameras.add(label)
-            } catch (e: Exception) {
-                // Ignore IDs that don't exist
-            }
-        }
 
         setContent {
             MaterialTheme {
@@ -56,7 +29,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    CameraListScreen(stringFromJNI(), nativeCameras, bruteForceCameras.toTypedArray())
+                    CameraListScreen(stringFromJNI(), nativeCameras)
                 }
             }
         }
@@ -73,7 +46,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun CameraListScreen(status: String, nativeCameras: Array<String>, bruteForceCameras: Array<String>) {
+fun CameraListScreen(status: String, nativeCameras: Array<String>) {
     Column(modifier = Modifier.padding(16.dp)) {
         Text(
             text = "Nothing RAW Engine",
@@ -87,50 +60,33 @@ fun CameraListScreen(status: String, nativeCameras: Array<String>, bruteForceCam
         )
         
         Text(
-            text = "Native Engine (NDK + Brute):",
+            text = "Sensor Forensics (ID | Facing | Focal | Sensor Size | FPS):",
             style = MaterialTheme.typography.titleLarge,
             modifier = Modifier.padding(bottom = 8.dp)
         )
 
-        LazyColumn(modifier = Modifier.weight(1f)) {
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
             items(nativeCameras.toList()) { camera ->
-                CameraEntry(camera)
+                val parts = camera.split("|")
+                val id = parts.getOrNull(0)?.trim() ?: ""
+                val facing = when (parts.getOrNull(1)?.trim()) {
+                    "0" -> "Front"
+                    "1" -> "Back"
+                    "2" -> "External"
+                    else -> "Unknown"
+                }
+                val optics = parts.getOrNull(2)?.trim() ?: ""
+                val sensor = parts.getOrNull(3)?.trim() ?: ""
+                val fps = parts.getOrNull(4)?.trim() ?: ""
+                
+                Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                    Text(text = "ID: $id ($facing)", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.secondary)
+                    Text(text = optics, style = MaterialTheme.typography.bodyMedium)
+                    Text(text = sensor, style = MaterialTheme.typography.bodyMedium)
+                    Text(text = fps, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+                }
+                Divider()
             }
         }
-
-        Divider(modifier = Modifier.padding(vertical = 16.dp))
-
-        Text(
-            text = "System Brute-Force (Java):",
-            style = MaterialTheme.typography.titleLarge,
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
-
-        LazyColumn(modifier = Modifier.weight(1f)) {
-            items(bruteForceCameras.toList()) { camera ->
-                CameraEntry(camera)
-            }
-        }
     }
-}
-
-@Composable
-fun CameraEntry(camera: String) {
-    val parts = camera.split(":")
-    val idInfo = parts.getOrNull(0) ?: "Unknown"
-    val facingCode = parts.getOrNull(1)?.trim()?.take(1)
-    val facing = when (facingCode) {
-        "0" -> "Front"
-        "1" -> "Back"
-        "2" -> "External"
-        else -> "Info: $camera"
-    }
-    
-    Column(modifier = Modifier.padding(vertical = 8.dp)) {
-        Text(text = idInfo, style = MaterialTheme.typography.bodyLarge)
-        if (facing != "Info: $camera") {
-             Text(text = "Facing: $facing", style = MaterialTheme.typography.bodyMedium)
-        }
-    }
-    Divider()
 }

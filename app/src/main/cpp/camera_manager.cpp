@@ -2,6 +2,8 @@
 #include <android/log.h>
 #include <vector>
 #include <string>
+#include <sstream>
+#include <iomanip>
 
 #define TAG "NothingRAW_CameraManager"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -23,50 +25,43 @@ CameraManager::~CameraManager() {
 std::vector<CameraInfo> CameraManager::GetCameraList() {
     std::vector<CameraInfo> cameras;
 
-    // 1. Standard Discovery
-    ACameraIdList* cameraIdList = nullptr;
-    camera_status_t status = ACameraManager_getCameraIdList(cameraManager_, &cameraIdList);
-
-    if (status == ACAMERA_OK && cameraIdList != nullptr) {
-        for (int i = 0; i < cameraIdList->numCameras; ++i) {
-            const char* id = cameraIdList->cameraIds[i];
-            ACameraMetadata* chars = nullptr;
-            status = ACameraManager_getCameraCharacteristics(cameraManager_, id, &chars);
-            if (status == ACAMERA_OK && chars != nullptr) {
-                ACameraMetadata_const_entry entry;
-                ACameraMetadata_getConstEntry(chars, ACAMERA_LENS_FACING, &entry);
-                int facing = entry.data.u8[0];
-                cameras.push_back({id, facing});
-                ACameraMetadata_free(chars);
-            }
-        }
-        ACameraManager_deleteCameraIdList(cameraIdList);
-    }
-
-    // 2. Brute-Force Discovery (Testing IDs 2-10)
-    // On some devices, physical IDs are not in the list but can still be queried directly.
-    for (int i = 2; i <= 10; ++i) {
+    // Probing IDs 0-5 aggressively
+    for (int i = 0; i <= 5; ++i) {
         std::string testId = std::to_string(i);
         ACameraMetadata* chars = nullptr;
-        status = ACameraManager_getCameraCharacteristics(cameraManager_, testId.c_str(), &chars);
+        camera_status_t status = ACameraManager_getCameraCharacteristics(cameraManager_, testId.c_str(), &chars);
 
         if (status == ACAMERA_OK && chars != nullptr) {
-            ACameraMetadata_const_entry entry;
-            ACameraMetadata_getConstEntry(chars, ACAMERA_LENS_FACING, &entry);
-            int facing = entry.data.u8[0];
+            ACameraMetadata_const_entry facingEntry;
+            ACameraMetadata_getConstEntry(chars, ACAMERA_LENS_FACING, &facingEntry);
+            int facing = facingEntry.data.u8[0];
 
-            // Check if we already have this ID
-            bool exists = false;
-            for (const auto& cam : cameras) {
-                if (cam.id == testId) {
-                    exists = true;
-                    break;
-                }
+            // Query Focal Length to identify lens type (Ultra-wide vs Tele)
+            ACameraMetadata_const_entry focalEntry;
+            ACameraMetadata_getConstEntry(chars, ACAMERA_LENS_INFO_AVAILABLE_FOCAL_LENGTHS, &focalEntry);
+            float focalLength = focalEntry.data.f[0];
+
+            // Query Sensor Size to differentiate 50MP vs 8MP
+            ACameraMetadata_const_entry sensorSizeEntry;
+            ACameraMetadata_getConstEntry(chars, ACAMERA_SENSOR_INFO_PHYSICAL_SIZE, &sensorSizeEntry);
+            float width = sensorSizeEntry.data.f[0];
+            float height = sensorSizeEntry.data.f[1];
+
+            // Query FPS ranges to see what's officially allowed
+            ACameraMetadata_const_entry fpsEntry;
+            ACameraMetadata_getConstEntry(chars, ACAMERA_CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES, &fpsEntry);
+
+            std::stringstream fpsStream;
+            fpsStream << "FPS: ";
+            for (uint32_t j = 0; j < fpsEntry.count; j += 2) {
+                fpsStream << "[" << (int)fpsEntry.data.i32[j] << "," << (int)fpsEntry.data.i32[j+1] << "] ";
             }
 
-            if (!exists) {
-                cameras.push_back({testId + " (Unmasked)", facing});
-            }
+            std::stringstream infoStream;
+            infoStream << testId << " | " << facing << " | f=" << std::fixed << std::setprecision(2) << focalLength
+                       << "mm | sensor=" << width << "x" << height << "mm | " << fpsStream.str();
+
+            cameras.push_back({infoStream.str(), facing});
             ACameraMetadata_free(chars);
         }
     }
