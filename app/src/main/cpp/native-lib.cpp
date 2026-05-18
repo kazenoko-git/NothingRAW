@@ -71,10 +71,22 @@ Java_com_kazenoko_nothingraw_MainActivity_setZoom(
     }
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_kazenoko_nothingraw_MainActivity_setPhysicalLens(
+        JNIEnv* env,
+        jobject /* this */,
+        jstring physicalId) {
+    if (gCameraEngine) {
+        const char* id = env->GetStringUTFChars(physicalId, nullptr);
+        gCameraEngine->SetPhysicalLens(id);
+        env->ReleaseStringUTFChars(physicalId, id);
+    }
+}
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_kazenoko_nothingraw_MainActivity_stringFromJNI(
         JNIEnv* env,
         jobject /* this */) {
-    std::string hello = "Nothing RAW Engine v0.3-threaded";
+    std::string hello = "Nothing RAW Engine v0.4-physical-mapped";
     return env->NewStringUTF(hello.c_str());
 }

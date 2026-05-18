@@ -6,6 +6,9 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
+// Forward declare to bypass header issues if any, but ensure it's linked
+extern "C" void ACaptureSessionOutput_setPhysicalCameraId(ACaptureSessionOutput* output, const char* physicalId) __attribute__((weak));
+
 namespace nothingraw {
 
 CameraEngine::CameraEngine(ACameraManager* manager) : cameraManager_(manager) {
@@ -23,55 +26,52 @@ CameraEngine::CameraEngine(ACameraManager* manager) : cameraManager_(manager) {
 }
 
 CameraEngine::~CameraEngine() {
-    LOGI("Engine: Destroying");
     {
         std::lock_guard<std::mutex> lock(queueMutex_);
         isRunning_ = false;
-        commandQueue_.push({CommandType::EXIT, "", nullptr, 1.0f});
+        commandQueue_.push({CommandType::EXIT, "", nullptr, 0.0f});
     }
     queueCondition_.notify_one();
-    if (workerThread_.joinable()) {
-        workerThread_.join();
-    }
+    if (workerThread_.joinable()) workerThread_.join();
 }
 
 void CameraEngine::OpenCamera(const std::string& id) {
-    LOGI("JNI: Queueing OpenCamera %s", id.c_str());
     std::lock_guard<std::mutex> lock(queueMutex_);
-    commandQueue_.push({CommandType::OPEN, id, nullptr, 1.0f});
+    commandQueue_.push({CommandType::OPEN, id, nullptr, 0.0f});
     queueCondition_.notify_one();
 }
 
 void CameraEngine::CloseCamera() {
-    LOGI("JNI: Queueing CloseCamera");
     std::lock_guard<std::mutex> lock(queueMutex_);
-    commandQueue_.push({CommandType::CLOSE, "", nullptr, 1.0f});
+    commandQueue_.push({CommandType::CLOSE, "", nullptr, 0.0f});
     queueCondition_.notify_one();
 }
 
 void CameraEngine::StartPreview(ANativeWindow* window) {
-    LOGI("JNI: Queueing StartPreview");
     std::lock_guard<std::mutex> lock(queueMutex_);
-    commandQueue_.push({CommandType::START_PREVIEW, "", window, 1.0f});
+    commandQueue_.push({CommandType::START_PREVIEW, "", window, 0.0f});
     queueCondition_.notify_one();
 }
 
 void CameraEngine::StopPreview() {
-    LOGI("JNI: Queueing StopPreview");
     std::lock_guard<std::mutex> lock(queueMutex_);
-    commandQueue_.push({CommandType::STOP_PREVIEW, "", nullptr, 1.0f});
+    commandQueue_.push({CommandType::STOP_PREVIEW, "", nullptr, 0.0f});
     queueCondition_.notify_one();
 }
 
 void CameraEngine::SetZoom(float ratio) {
-    LOGI("JNI: Queueing SetZoom %f", ratio);
     std::lock_guard<std::mutex> lock(queueMutex_);
     commandQueue_.push({CommandType::SET_ZOOM, "", nullptr, ratio});
     queueCondition_.notify_one();
 }
 
+void CameraEngine::SetPhysicalLens(const std::string& physicalId) {
+    std::lock_guard<std::mutex> lock(queueMutex_);
+    commandQueue_.push({CommandType::SET_PHYSICAL, physicalId, nullptr, 0.0f});
+    queueCondition_.notify_one();
+}
+
 void CameraEngine::RunCommandLoop() {
-    LOGI("Thread: Worker started");
     while (isRunning_) {
         Command cmd;
         {
@@ -83,37 +83,20 @@ void CameraEngine::RunCommandLoop() {
 
         switch (cmd.type) {
             case CommandType::OPEN: {
-                LOGI("Thread: Executing OPEN %s", cmd.cameraId.c_str());
+                activeId_ = cmd.stringParam;
                 CloseCamera_Internal();
-
                 ACameraMetadata* chars = nullptr;
-                ACameraManager_getCameraCharacteristics(cameraManager_, cmd.cameraId.c_str(), &chars);
+                ACameraManager_getCameraCharacteristics(cameraManager_, activeId_.c_str(), &chars);
                 if (chars) {
                     ACameraMetadata_const_entry entry;
                     ACameraMetadata_getConstEntry(chars, ACAMERA_SENSOR_INFO_ACTIVE_ARRAY_SIZE, &entry);
                     if (entry.count == 4) {
                         activeArray_ = {entry.data.i32[0], entry.data.i32[1], entry.data.i32[2], entry.data.i32[3]};
                     }
-
-                    // Log optimal resolution
-                    ACameraMetadata_getConstEntry(chars, ACAMERA_SCALER_AVAILABLE_STREAM_CONFIGURATIONS, &entry);
-                    for (uint32_t i = 0; i < entry.count; i += 4) {
-                        int32_t format = entry.data.i32[i];
-                        int32_t w = entry.data.i32[i+1];
-                        int32_t h = entry.data.i32[i+2];
-                        int32_t input = entry.data.i32[i+3];
-                        if (format == 0x22 && !input) { // 0x22 = PRIVATE/YUV
-                            LOGI("Thread: Supported Size: %dx%d", w, h);
-                        }
-                    }
-
                     ACameraMetadata_free(chars);
                 }
-
-                camera_status_t status = ACameraManager_openCamera(cameraManager_, cmd.cameraId.c_str(), &deviceCallbacks_, &cameraDevice_);
-                if (status == ACAMERA_OK && window_) {
-                    StartPreview_Internal();
-                }
+                ACameraManager_openCamera(cameraManager_, activeId_.c_str(), &deviceCallbacks_, &cameraDevice_);
+                if (window_) StartPreview_Internal();
                 break;
             }
             case CommandType::CLOSE:
@@ -129,11 +112,15 @@ void CameraEngine::RunCommandLoop() {
                 StopPreview_Internal();
                 break;
             case CommandType::SET_ZOOM:
-                zoomRatio_ = cmd.zoomRatio;
+                zoomRatio_ = cmd.floatParam;
                 if (captureSession_ && previewRequest_) {
                     ACaptureRequest_setEntry_float(previewRequest_, ACAMERA_CONTROL_ZOOM_RATIO, 1, &zoomRatio_);
                     ACameraCaptureSession_setRepeatingRequest(captureSession_, nullptr, 1, &previewRequest_, nullptr);
                 }
+                break;
+            case CommandType::SET_PHYSICAL:
+                targetPhysicalId_ = cmd.stringParam;
+                if (window_ && cameraDevice_) StartPreview_Internal();
                 break;
             case CommandType::EXIT:
                 CloseCamera_Internal();
@@ -145,7 +132,6 @@ void CameraEngine::RunCommandLoop() {
 void CameraEngine::CloseCamera_Internal() {
     StopPreview_Internal();
     if (cameraDevice_) {
-        LOGI("Internal: Closing Camera Device");
         ACameraDevice_close(cameraDevice_);
         cameraDevice_ = nullptr;
     }
@@ -159,48 +145,38 @@ void CameraEngine::StartPreview_Internal() {
     ACaptureSessionOutputContainer_create(&outputs_);
     ACameraOutputTarget_create(window_, &textureTarget_);
     ACaptureSessionOutput_create(window_, &textureOutput_);
+
+    // NUCLEAR OPTION: PHYSICAL ID LINKAGE (Weakly linked for safety)
+    if (!targetPhysicalId_.empty() && ACaptureSessionOutput_setPhysicalCameraId != nullptr) {
+        LOGI("Internal: Linking Surface to Physical ID: %s", targetPhysicalId_.c_str());
+        ACaptureSessionOutput_setPhysicalCameraId(textureOutput_, targetPhysicalId_.c_str());
+    }
+
     ACaptureSessionOutputContainer_add(outputs_, textureOutput_);
 
     ACameraDevice_createCaptureSession(cameraDevice_, outputs_, &sessionCallbacks_, &captureSession_);
     ACameraDevice_createCaptureRequest(cameraDevice_, TEMPLATE_PREVIEW, &previewRequest_);
     ACaptureRequest_addTarget(previewRequest_, textureTarget_);
 
-    // --- BYPASS ISP OVER-PROCESSING ---
-
-    // 1. Force 60 FPS
     int32_t fpsRange[2] = {60, 60};
     ACaptureRequest_setEntry_i32(previewRequest_, ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 2, fpsRange);
 
-    // 2. Set Zoom (0.6x for wide)
     float zoom = zoomRatio_;
     ACaptureRequest_setEntry_float(previewRequest_, ACAMERA_CONTROL_ZOOM_RATIO, 1, &zoom);
 
-    // 3. DISABLE ALL STABILIZATION (This kills the crop!)
-    uint8_t oisMode = ACAMERA_LENS_OPTICAL_STABILIZATION_MODE_OFF;
-    ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_LENS_OPTICAL_STABILIZATION_MODE, 1, &oisMode);
+    uint8_t off = 0;
+    ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_LENS_OPTICAL_STABILIZATION_MODE, 1, &off);
+    ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE, 1, &off);
+    ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_NOISE_REDUCTION_MODE, 1, &off);
+    ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_EDGE_MODE, 1, &off);
+    ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_DISTORTION_CORRECTION_MODE, 1, &off);
 
-    uint8_t eisMode = ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE_OFF;
-    ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE, 1, &eisMode);
-
-    // 4. DISABLE NOISE REDUCTION (Kills the "grainy" mush, gives raw sensor look)
-    uint8_t noiseMode = ACAMERA_NOISE_REDUCTION_MODE_OFF;
-    ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_NOISE_REDUCTION_MODE, 1, &noiseMode);
-
-    // 5. DISABLE EDGE ENHANCEMENT
-    uint8_t edgeMode = ACAMERA_EDGE_MODE_OFF;
-    ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_EDGE_MODE, 1, &edgeMode);
-
-    // 6. DISABLE ABERRATION CORRECTION
-    uint8_t colorMode = ACAMERA_COLOR_CORRECTION_ABERRATION_MODE_OFF;
-    ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_COLOR_CORRECTION_ABERRATION_MODE, 1, &colorMode);
-
-    // 7. ENSURE FULL CROP REGION
     if (!activeArray_.empty()) {
         ACaptureRequest_setEntry_i32(previewRequest_, ACAMERA_SCALER_CROP_REGION, 4, activeArray_.data());
     }
 
     ACameraCaptureSession_setRepeatingRequest(captureSession_, nullptr, 1, &previewRequest_, nullptr);
-    LOGI("Internal: Preview started with RAW configuration (OIS/EIS/NR OFF)");
+    LOGI("Internal: Preview started with Physical Linkage: %s", targetPhysicalId_.c_str());
 }
 
 void CameraEngine::StopPreview_Internal() {
@@ -227,7 +203,7 @@ void CameraEngine::StopPreview_Internal() {
     }
 }
 
-// Callbacks (Simplified)
+// Callbacks
 void CameraEngine::OnDeviceDisconnected(void* context, ACameraDevice* device) {}
 void CameraEngine::OnDeviceError(void* context, ACameraDevice* device, int error) {}
 void CameraEngine::OnSessionActive(void* context, ACameraCaptureSession* session) {}

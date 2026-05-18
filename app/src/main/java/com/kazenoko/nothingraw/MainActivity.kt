@@ -31,6 +31,7 @@ class MainActivity : ComponentActivity() {
 
     private var activeCameraId by mutableStateOf<String?>(null)
     private var currentZoom by mutableStateOf(1.0f)
+    private var physicalLink by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -92,7 +93,7 @@ class MainActivity : ComponentActivity() {
             Row(modifier = Modifier.fillMaxSize().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column(modifier = Modifier.width(300.dp).background(Color.Black.copy(alpha = 0.6f)).padding(8.dp)) {
                     Text(
-                        text = "NOTHING RAW PRO",
+                        text = "NOTHING RAW PRO V4",
                         style = MaterialTheme.typography.titleSmall,
                         color = Color.Yellow,
                         fontWeight = FontWeight.Bold
@@ -113,16 +114,34 @@ class MainActivity : ComponentActivity() {
                             ) {
                                 Text(text = "ID: $id", color = if (isSelected) Color.Cyan else Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                 Text(text = camera.substringAfter("|").trim(), color = Color.LightGray, fontSize = 8.sp, lineHeight = 10.sp)
-                                Button(
-                                    onClick = {
-                                        activeCameraId = id
-                                        currentZoom = 1.0f
-                                        openCamera(id)
-                                    },
-                                    modifier = Modifier.height(20.dp).padding(top = 2.dp),
-                                    contentPadding = PaddingValues(0.dp)
-                                ) {
-                                    Text("OPEN", fontSize = 8.sp)
+                                
+                                Row(modifier = Modifier.padding(top = 4.dp)) {
+                                    Button(
+                                        onClick = {
+                                            activeCameraId = id
+                                            physicalLink = null
+                                            openCamera(id)
+                                        },
+                                        modifier = Modifier.height(20.dp),
+                                        contentPadding = PaddingValues(horizontal = 4.dp)
+                                    ) {
+                                        Text("OPEN", fontSize = 8.sp)
+                                    }
+                                    
+                                    if (id == "4") {
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Button(
+                                            onClick = {
+                                                physicalLink = "2"
+                                                setPhysicalLens("2")
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color.Magenta),
+                                            modifier = Modifier.height(20.dp),
+                                            contentPadding = PaddingValues(horizontal = 4.dp)
+                                        ) {
+                                            Text("FORCE ID 2", fontSize = 8.sp)
+                                        }
+                                    }
                                 }
                             }
                             HorizontalDivider(color = Color.Gray, thickness = 0.5.dp)
@@ -144,7 +163,10 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.padding(top = 16.dp)
                     )
                     
-                    Text(text = "MANUAL OVERRIDE", color = Color.Red, style = MaterialTheme.typography.labelSmall)
+                    if (physicalLink != null) {
+                         Text(text = "LINKED TO PHYSICAL $physicalLink", color = Color.Cyan, style = MaterialTheme.typography.labelSmall)
+                    }
+                    Text(text = "STAB/NR BYPASSED", color = Color.Red, style = MaterialTheme.typography.labelSmall)
                 }
             }
         }
@@ -202,6 +224,7 @@ class MainActivity : ComponentActivity() {
     external fun startPreview(surface: Surface)
     external fun stopCamera()
     external fun setZoom(ratio: Float)
+    external fun setPhysicalLens(physicalId: String)
 
     companion object {
         init {

@@ -28,6 +28,7 @@ public:
     void StopPreview();
 
     void SetZoom(float ratio);
+    void SetPhysicalLens(const std::string& physicalId);
 
 private:
     void RunCommandLoop();
@@ -44,15 +45,17 @@ private:
     ACaptureRequest* previewRequest_ = nullptr;
     ANativeWindow* window_ = nullptr;
 
+    std::string activeId_;
+    std::string targetPhysicalId_;
     float zoomRatio_ = 1.0f;
     std::vector<int32_t> activeArray_;
 
-    enum class CommandType { OPEN, CLOSE, START_PREVIEW, STOP_PREVIEW, SET_ZOOM, EXIT };
+    enum class CommandType { OPEN, CLOSE, START_PREVIEW, STOP_PREVIEW, SET_ZOOM, SET_PHYSICAL, EXIT };
     struct Command {
         CommandType type;
-        std::string cameraId;
+        std::string stringParam;
         ANativeWindow* window;
-        float zoomRatio;
+        float floatParam;
     };
     std::queue<Command> commandQueue_;
     std::mutex queueMutex_;
