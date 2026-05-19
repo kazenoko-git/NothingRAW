@@ -11,7 +11,7 @@ extern "C" void ACaptureSessionOutput_setPhysicalCameraId(ACaptureSessionOutput*
 namespace nothingraw {
 
 CameraEngine::CameraEngine(ACameraManager* manager) : cameraManager_(manager) {
-    LOGI("Engine: Initializing (SPOOFED)");
+    LOGI("Engine: Initializing");
     deviceCallbacks_.context = this;
     deviceCallbacks_.onDisconnected = OnDeviceDisconnected;
     deviceCallbacks_.onError = OnDeviceError;
@@ -151,12 +151,12 @@ void CameraEngine::StartPreview_Internal() {
 
     ACaptureSessionOutputContainer_add(outputs_, textureOutput_);
 
-    // Switch to TEMPLATE_RECORD (often provides wider FOV than TEMPLATE_PREVIEW)
+    // Use TEMPLATE_STILL_CAPTURE for widest possible FOV (bypasses video-mode crops)
     ACameraDevice_createCaptureSession(cameraDevice_, outputs_, &sessionCallbacks_, &captureSession_);
-    ACameraDevice_createCaptureRequest(cameraDevice_, TEMPLATE_RECORD, &previewRequest_);
+    ACameraDevice_createCaptureRequest(cameraDevice_, TEMPLATE_STILL_CAPTURE, &previewRequest_);
     ACaptureRequest_addTarget(previewRequest_, textureTarget_);
 
-    // 60 FPS UNLOCK
+    // FORCE UNLOCK 60 FPS
     int32_t fpsRange[2] = {60, 60};
     ACaptureRequest_setEntry_i32(previewRequest_, ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 2, fpsRange);
 
@@ -174,19 +174,12 @@ void CameraEngine::StartPreview_Internal() {
     ACaptureRequest_setEntry_u8(previewRequest_, ACAMERA_SHADING_MODE, 1, &off);
 
     if (!activeArray_.empty()) {
+        // Force the SCALER_CROP_REGION to the absolute sensor maximum
         ACaptureRequest_setEntry_i32(previewRequest_, ACAMERA_SCALER_CROP_REGION, 4, activeArray_.data());
     }
 
-    // --- QUALCOMM VENDOR TAG BYPASS ---
-    // We'll attempt to set some well-known Qualcomm tags to enable all aux cameras
-    // 0x01 = Enable, 0x00 = Disable
-    uint8_t qcomEnable = 1;
-    // com.qti.chi.multicameraconfig.MultiCameraConfig = 0x80040001 (Example)
-    // Since we don't have the tag map, we'll try to sniff them or use standard IDs.
-    // Most Nothing Phones respond to package spoofing better than vendor tags.
-
     ACameraCaptureSession_setRepeatingRequest(captureSession_, nullptr, 1, &previewRequest_, nullptr);
-    LOGI("Internal: Preview started (RECORD TEMPLATE + ALL OFF)");
+    LOGI("Internal: Preview started (STILL TEMPLATE + ALL OFF)");
 }
 
 void CameraEngine::StopPreview_Internal() {
