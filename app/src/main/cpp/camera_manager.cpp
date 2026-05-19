@@ -55,15 +55,14 @@ std::vector<CameraInfo> CameraManager::GetCameraList() {
                        << " | FOV: " << std::setprecision(1) << hfov << "°"
                        << " | Res: " << pixelW << "x" << pixelH;
 
-            // Log Vendor Tags to Logcat for deeper analysis
-            uint32_t count = 0;
+            // Fix type for numEntries as per NDK header (int32_t instead of uint32_t)
+            int32_t count = 0;
             const uint32_t* tags = nullptr;
             ACameraMetadata_getAllTags(chars, &count, &tags);
-            LOGI("Sensor ID %s has %u tags", testId.c_str(), count);
-            for (uint32_t t = 0; t < count; ++t) {
+            LOGI("Sensor ID %s has %d tags", testId.c_str(), count);
+            for (int32_t t = 0; t < count; ++t) {
                 if (tags[t] >= 0x80000000) {
-                    // We don't have the names, but we can see the IDs
-                    // LOGI("  Vendor Tag: 0x%08X", tags[t]);
+                    // Vendor Tag
                 }
             }
 
