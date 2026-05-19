@@ -1,4 +1,4 @@
-package org.codeaurora.snapcam
+package com.kazenoko.nothingraw
 
 import android.Manifest
 import android.content.pm.ActivityInfo
@@ -93,7 +93,7 @@ class MainActivity : ComponentActivity() {
             Row(modifier = Modifier.fillMaxSize().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column(modifier = Modifier.width(300.dp).background(Color.Black.copy(alpha = 0.6f)).padding(8.dp)) {
                     Text(
-                        text = "NOTHING RAW PRO V5 (SPOOFED)",
+                        text = "NOTHING RAW PRO V4",
                         style = MaterialTheme.typography.titleSmall,
                         color = Color.Yellow,
                         fontWeight = FontWeight.Bold

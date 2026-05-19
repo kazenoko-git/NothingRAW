@@ -9,7 +9,7 @@ static nothingraw::CameraManager* gCameraManager = nullptr;
 static nothingraw::CameraEngine* gCameraEngine = nullptr;
 
 extern "C" JNIEXPORT jobjectArray JNICALL
-Java_org_codeaurora_snapcam_MainActivity_getCameraList(
+Java_com_kazenoko_nothingraw_MainActivity_getCameraList(
         JNIEnv* env,
         jobject /* this */) {
     if (!gCameraManager) {
@@ -28,7 +28,7 @@ Java_org_codeaurora_snapcam_MainActivity_getCameraList(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_codeaurora_snapcam_MainActivity_openCamera(
+Java_com_kazenoko_nothingraw_MainActivity_openCamera(
         JNIEnv* env,
         jobject /* this */,
         jstring cameraId) {
@@ -42,7 +42,7 @@ Java_org_codeaurora_snapcam_MainActivity_openCamera(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_codeaurora_snapcam_MainActivity_startPreview(
+Java_com_kazenoko_nothingraw_MainActivity_startPreview(
         JNIEnv* env,
         jobject /* this */,
         jobject surface) {
@@ -53,7 +53,7 @@ Java_org_codeaurora_snapcam_MainActivity_startPreview(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_codeaurora_snapcam_MainActivity_stopCamera(
+Java_com_kazenoko_nothingraw_MainActivity_stopCamera(
         JNIEnv* env,
         jobject /* this */) {
     if (gCameraEngine) {
@@ -62,7 +62,7 @@ Java_org_codeaurora_snapcam_MainActivity_stopCamera(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_codeaurora_snapcam_MainActivity_setZoom(
+Java_com_kazenoko_nothingraw_MainActivity_setZoom(
         JNIEnv* env,
         jobject /* this */,
         jfloat ratio) {
@@ -72,7 +72,7 @@ Java_org_codeaurora_snapcam_MainActivity_setZoom(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_codeaurora_snapcam_MainActivity_setPhysicalLens(
+Java_com_kazenoko_nothingraw_MainActivity_setPhysicalLens(
         JNIEnv* env,
         jobject /* this */,
         jstring physicalId) {
@@ -84,9 +84,9 @@ Java_org_codeaurora_snapcam_MainActivity_setPhysicalLens(
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_org_codeaurora_snapcam_MainActivity_stringFromJNI(
+Java_com_kazenoko_nothingraw_MainActivity_stringFromJNI(
         JNIEnv* env,
         jobject /* this */) {
-    std::string hello = "Nothing RAW Engine v0.5-SPOOFED";
+    std::string hello = "Nothing RAW Engine v0.4-reverted";
     return env->NewStringUTF(hello.c_str());
 }

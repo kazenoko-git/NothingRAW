@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "org.codeaurora.snapcam"
+    namespace = "com.kazenoko.nothingraw"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "org.codeaurora.snapcam"
+        applicationId = "com.kazenoko.nothingraw"
         minSdk = 35
         targetSdk = 36
         versionCode = 1
